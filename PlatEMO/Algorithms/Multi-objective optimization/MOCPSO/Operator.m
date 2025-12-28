@@ -80,6 +80,7 @@ function [OutVel, OutDec] = DV_Func(Loser, Winner,Problem)
     LoserObjs = Loser.objs;
     [FrontNo,MaxFNo] = NDSort(LoserObjs,inf);
     
+    % 这里求得的FrontNo，每次迭代含义发生改变（解的层级->最近邻的索引），可能会修改上次迭代的结果，需要修改
     for i = 1:MaxFNo
         tmpNo = find(i==FrontNo);
         dis = pdist2(LoserObjs(tmpNo,:), LoserObjs(tmpNo,:));
@@ -95,6 +96,7 @@ function [OutVel, OutDec] = DV_Func(Loser, Winner,Problem)
     c3=0.13;
     c4=1.28;
 
+    %  这里求得的xr是个列向量，貌似有问题，要改为行向量
     r1     = repmat(rand(N,1),1,D);
     r2     = repmat(rand(N,1),1,D);
     r3     = repmat(rand(N,1),1,D);

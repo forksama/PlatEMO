@@ -20,6 +20,26 @@ classdef MOCPSO < ALGORITHM
 %--------------------------------------------------------------------------
 methods
     function main(Algorithm,Problem)
+
+        %% TODO
+        % 1. 目前算法中在适应度以及环境筛选中，都进行了归一化，对多目标没有进行权重设置
+
+        
+        % 算法中的适应度计算负责 “前期分组”，判断粒子的 “相对优秀程度”
+        % 评估的是 “粒子在当前种群中的相对位置”
+        % 根据适应度为粒子划分DSS（探险）或 CSS（追优）策略
+
+        % 算法中的环境筛选负责 “后期选优”，判断粒子的 “绝对优秀程度”
+        % 评估的是 “粒子的绝对质量”
+        % APD 越小，粒子越靠近理想点（收敛性好）且越匹配参考向量（多样性好）
+
+        % 关于Population.decs，这个是决策变量，表示粒子的位置
+        % 关于PROBLEM.CalDec，这个是决策变量修复函数，用于修复决策变量中的无效解（直接修改决策变量）
+        % 关于Population.cons，这个是约束值，表示解的约束违反程度
+        % 关于PROBLEM.CalCon，这个是约束函数，用于计算解的约束违反程度
+        % 约束违反程度若计算出来大于0，则表示这是一个不可行解，在存在可行解的情况下，永远不会被选择，建议使用CalDec代替CalCon的场景
+
+
         %% Generate random population
         [V,Problem.N] = UniformPoint(Problem.N,Problem.M);
         Population = Problem.Initialization();
