@@ -49,6 +49,7 @@ classdef UAVPathPlanning < PROBLEM
         numWaypoints;    % 航点数量（自动计算）
         presetWaypoints; % 预设航点位置（在预设路径上均匀分布，numWaypoints x 3）
         waypointSegmentMapping; % 航点到路径段的映射（numWaypoints x 1），每个值表示对应的路径段索引（1到numPresetPoints-1）
+        xyBound; % XY平面边界约束（numPresetPoints-1 x 4），每行包含[kLower, cLower, kUpper, cUpper]，对应一个路径段
     end
     
     methods
@@ -146,15 +147,25 @@ classdef UAVPathPlanning < PROBLEM
             file = fullfile(fileparts(mfilename('fullpath')), file);
             
             if exist(file, 'file') == 2
-                % 加载数据文件（尝试加载obstacleGridSize，如果不存在也不会报错）
+                % 加载数据文件（尝试加载obstacleGridSize和xyBound，如果不存在也不会报错）
                 try
-                    load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
+                    load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'xyBound');
                     if exist('obstacleGridSize', 'var') && ~isempty(obstacleGridSize)
                         obj.obstacleGridSize = obstacleGridSize;
                     end
+                    if exist('xyBound', 'var') && ~isempty(xyBound)
+                        obj.xyBound = xyBound;
+                    end
                 catch
-                    % 如果obstacleGridSize不存在，只加载其他变量
-                    load(file, 'presetPath', 'baseStations', 'obstacles');
+                    % 如果某些变量不存在，尝试加载基本变量
+                    try
+                        load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
+                        if exist('obstacleGridSize', 'var') && ~isempty(obstacleGridSize)
+                            obj.obstacleGridSize = obstacleGridSize;
+                        end
+                    catch
+                        load(file, 'presetPath', 'baseStations', 'obstacles');
+                    end
                 end
                 
                 % 检查数据维度，如果是2D则转换为3D
@@ -176,6 +187,19 @@ classdef UAVPathPlanning < PROBLEM
                         obj.obstacleGridSize = [size(obstacles, 1), size(obstacles, 2)];
                     end
                 end
+                
+                % 如果xyBound未加载，根据当前的presetPath生成xyBound
+                % 注意：这里不调用generatePresetPath，因为它会重新生成presetPath
+                % 如果xyBound未定义，会在后续根据presetPath生成
+                if isempty(obj.xyBound)
+                    % 根据当前的presetPath生成xyBound（调用generatePresetPath但只使用xyBound部分）
+                    % 先保存当前的presetPath
+                    savedPresetPath = obj.presetPath;
+                    % 调用generatePresetPath生成xyBound
+                    obj.generatePresetPath(obstacleMethod);
+                    % 恢复presetPath（因为generatePresetPath会重新生成它）
+                    obj.presetPath = savedPresetPath;
+                end
             else
                 % 生成预设路径和障碍物（根据obstacleMethod）
                 [presetPath, obstacles] = obj.generatePresetPathAndObstacles(obstacleMethod);
@@ -183,15 +207,26 @@ classdef UAVPathPlanning < PROBLEM
                 % 在建筑物顶端生成基站位置（基于每平方公里基站数量）
                 baseStations = obj.generateBaseStationsUniform(bsPerKm2, obstacles);
                 
-                % 保存数据（包括网格大小）
+                % 保存数据（包括网格大小和xyBound）
                 obstacleGridSize = obj.obstacleGridSize;
-                save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
+                xyBound = obj.xyBound;
+                save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'xyBound');
             end
             
             obj.obstacles = obstacles;
             
             obj.presetPath = presetPath;
             obj.baseStations = baseStations;
+            
+            % 如果xyBound未设置（从文件加载时可能不存在），根据当前的presetPath生成
+            if isempty(obj.xyBound)
+                % 先保存当前的presetPath
+                savedPresetPath = obj.presetPath;
+                % 调用generatePresetPath生成xyBound
+                obj.generatePresetPath(obstacleMethod);
+                % 恢复presetPath（因为generatePresetPath会重新生成它）
+                obj.presetPath = savedPresetPath;
+            end
             
             % 更新基站数量为实际生成的基站数量（等于建筑物数量）
             obj.numBS = size(baseStations, 1);
@@ -385,6 +420,12 @@ classdef UAVPathPlanning < PROBLEM
             %          （向量ab与向量bc之间的夹角不大于90度）
             %   约束2：航点不可在建筑物中
             %   约束3：两个航点间的连线不可穿过建筑物
+            %   约束4：XY平面边界约束（xyBound）
+            %         对每个路径段下的所有航点(x, y, z)，满足：
+            %         - y > kLower*x + cLower 且 y < kUpper*x + cUpper
+            %         - 特殊情况：若kLower或kUpper为realmax，则：
+            %           * 当kLower为realmax时，满足x > cLower
+            %           * 当kUpper为realmax时，满足x < cUpper
             %
             %   约束违反度 = max(0, violation)
             %   如果 violation <= 0，约束违反度为0（满足约束）
@@ -412,8 +453,12 @@ classdef UAVPathPlanning < PROBLEM
             %   1. 连续三个航点之间的夹角约束：numWaypoints - 2（需要至少3个航点）
             %   2. 航点不在建筑物中：numWaypoints
             %   3. 连线不穿过建筑物：numWaypoints - 1
-            numConstraints = (numWaypoints - 1) + max(0, numWaypoints - 2) + numWaypoints + (numWaypoints - 1);
+            %   4. XY平面边界约束（xyBound）：numWaypoints
+            numConstraints = (numWaypoints - 1) + max(0, numWaypoints - 2) + numWaypoints + (numWaypoints - 1) + numWaypoints;
             PopCon = zeros(N, numConstraints);
+            
+            % 获取航点到路径段的映射（用于xyBound约束）
+            segmentMapping = obj.getWaypointSegmentMapping();
             
             for i = 1:N
                 % 提取航点坐标（3D：x, y, z）
@@ -482,6 +527,61 @@ classdef UAVPathPlanning < PROBLEM
                     violation = obj.checkSegmentIntersectsObstacle(currentWP, nextWP);
                     % 确保违反度非负（虽然checkSegmentIntersectsObstacle应该返回非负值，但为了保险起见）
                     PopCon(i, constraintIdx) = max(0, violation);
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束4：检查XY平面边界约束（xyBound）
+                % 对每个航点，根据其所属的路径段，检查是否满足xyBound约束
+                for j = 1:numWaypoints
+                    waypoint = waypoints(j, :);
+                    x = waypoint(1);
+                    y = waypoint(2);
+                    
+                    % 获取航点对应的路径段索引
+                    segmentIdx = segmentMapping(j);
+                    
+                    % 获取该路径段的xyBound约束
+                    if ~isempty(obj.xyBound) && segmentIdx >= 1 && segmentIdx <= size(obj.xyBound, 1)
+                        kLower = obj.xyBound(segmentIdx, 1);
+                        cLower = obj.xyBound(segmentIdx, 2);
+                        kUpper = obj.xyBound(segmentIdx, 3);
+                        cUpper = obj.xyBound(segmentIdx, 4);
+                        
+                        violation = 0;
+                        
+                        % 检查下界约束：y > kLower*x + cLower
+                        if kLower == realmax
+                            % 特殊情况：kLower为realmax，检查x > cLower
+                            if x <= cLower
+                                violation = violation + (cLower - x);
+                            end
+                        else
+                            % 一般情况：y > kLower*x + cLower
+                            lowerBound = kLower * x + cLower;
+                            if y <= lowerBound
+                                violation = violation + (lowerBound - y);
+                            end
+                        end
+                        
+                        % 检查上界约束：y < kUpper*x + cUpper
+                        if kUpper == realmax
+                            % 特殊情况：kUpper为realmax，检查x < cUpper
+                            if x >= cUpper
+                                violation = violation + (x - cUpper);
+                            end
+                        else
+                            % 一般情况：y < kUpper*x + cUpper
+                            upperBound = kUpper * x + cUpper;
+                            if y >= upperBound
+                                violation = violation + (y - upperBound);
+                            end
+                        end
+                        
+                        PopCon(i, constraintIdx) = max(0, violation);
+                    else
+                        % 如果没有定义xyBound或索引超出范围，约束违反度为0
+                        PopCon(i, constraintIdx) = 0;
+                    end
                     constraintIdx = constraintIdx + 1;
                 end
                 
@@ -594,6 +694,14 @@ classdef UAVPathPlanning < PROBLEM
                             switchCount = switchCount + 1;
                         end
                         % 更新连接的基站（改变到信号最强的基站）
+                        previousBS = currentBS;
+                    else
+                        % 信号强度 >= 阈值，继续连接之前的基站
+                        % 注意：如果信号强度足够，无人机应该继续连接之前的基站
+                        % 但为了保持逻辑一致性，我们仍然更新previousBS为currentBS
+                        % 因为如果信号强度足够，currentBS应该等于previousBS（信号最强的基站）
+                        % 如果currentBS != previousBS，说明信号强度虽然>=阈值，但最强的基站已经改变
+                        % 这种情况下，我们更新previousBS但不计数切换（因为信号强度足够，不需要切换）
                         previousBS = currentBS;
                     end
                 else
@@ -719,7 +827,7 @@ classdef UAVPathPlanning < PROBLEM
             % - 目标2（switchCount）：最坏情况每个航点都切换，最多numWaypoints次
             %   设置参考点为numWaypoints*1.5，足够大
             
-            R = [150, numWaypoints];
+            R = [105, 3];
             
             % 注意：如果HV仍然为0，可能是以下原因：
             % 1. 参考点仍然太小，实际解比参考点还差
@@ -749,6 +857,19 @@ classdef UAVPathPlanning < PROBLEM
                     40,   40,  40;   % 起点
                     80,  40,  40
                 ];
+                
+                % XY平面边界约束（xyBound）
+                % 每行对应一个路径段，格式：[kLower, cLower, kUpper, cUpper]
+                % 对路径段下的所有航点(x, y, z)，满足：
+                %   - y > kLower*x + cLower 且 y < kUpper*x + cUpper
+                %   - 特殊情况：若kLower或kUpper为realmax，则：
+                %     * 当kLower为realmax时，满足x > cLower
+                %     * 当kUpper为realmax时，满足x < cUpper
+                % 示例：对于路径段[40,40,40]到[80,40,40]，约束y>33且y<50
+                obj.xyBound = [
+                    0, 33, 0, 50  % 路径段1：[40,40,40]到[80,40,40]
+                ];
+                
                 % presetPath = [
                 %     40,   40,  40;   % 起点
                 %     168,  40,  40;   % 转折点1
@@ -756,6 +877,11 @@ classdef UAVPathPlanning < PROBLEM
                 %     83,   125, 40;   % 转折点3
                 %     83,   208, 40;   % 转折点4
                 %     250,  208, 40    % 终点
+                % ];
+                % 对应的xyBound示例：
+                % obj.xyBound = [
+                %     0, 33, 0, 50;              % 路径段1：[40,40,40]到[168,40,40]
+                %     realmax, 74, realmax, 91   % 路径段2：[168,40,40]到[168,125,40]
                 % ];
             else
                 error('未知的预设路径生成方法: %d', method);
