@@ -48,6 +48,7 @@ classdef UAVPathPlanning < PROBLEM
         pathLength;      % 预设路径总长度
         numWaypoints;    % 航点数量（自动计算）
         presetWaypoints; % 预设航点位置（在预设路径上均匀分布，numWaypoints x 3）
+        waypointSegmentMapping; % 航点到路径段的映射（numWaypoints x 1），每个值表示对应的路径段索引（1到numPresetPoints-1）
     end
     
     methods
@@ -55,6 +56,23 @@ classdef UAVPathPlanning < PROBLEM
         function threshold = getSwitchThreshold(obj)
             threshold = obj.switchThreshold;
             
+        end
+        
+        %% 获取航点到路径段的映射（公共方法）
+        function segmentMapping = getWaypointSegmentMapping(obj)
+            %getWaypointSegmentMapping - 获取每个航点对应的路径段索引
+            %
+            %   输出：
+            %       segmentMapping - numWaypoints x 1向量，每个值表示对应的路径段索引
+            %                       路径段索引范围：1 到 numPresetPoints-1
+            %                       段i表示从presetPath(i)到presetPath(i+1)的路径段
+            
+            % 确保映射关系已经初始化
+            if isempty(obj.waypointSegmentMapping)
+                obj.generateUniformWaypoints();
+            end
+            
+            segmentMapping = obj.waypointSegmentMapping;
         end
         
         %% 默认设置
@@ -195,7 +213,11 @@ classdef UAVPathPlanning < PROBLEM
             obj.D = obj.numWaypoints * 3;
             
             % 在预设路径上按距离均匀分布生成预设航点
+            % 同时生成waypointSegmentMapping（航点到路径段的映射）
             obj.presetWaypoints = obj.generateUniformWaypoints();
+            
+            % 注意：waypointSegmentMapping会在generateUniformWaypoints中自动生成
+            % 即使从文件加载，也会根据presetPath重新生成，确保一致性
             
             % 设置决策变量的上下界
             % 如果用户传递了lower/upper且维度匹配，则使用用户的值；否则使用默认值
@@ -609,6 +631,7 @@ classdef UAVPathPlanning < PROBLEM
         function presetWaypoints = generateUniformWaypoints(obj)
             % 在预设路径上按距离均匀分布生成航点
             % 航点数量由 pathLength / (velocity * 0.8 * TTT) 决定
+            % 同时保存每个航点对应的路径段索引到obj.waypointSegmentMapping
             
             numPresetPoints = size(obj.presetPath, 1);
             numWaypoints = obj.numWaypoints;
@@ -625,6 +648,9 @@ classdef UAVPathPlanning < PROBLEM
             
             % 在预设路径上插值生成航点（3D坐标）
             presetWaypoints = zeros(numWaypoints, 3);
+            % 初始化航点到路径段的映射（numWaypoints x 1）
+            obj.waypointSegmentMapping = zeros(numWaypoints, 1);
+            
             for j = 1:numWaypoints
                 targetDist = targetDistances(j);
                 
@@ -634,9 +660,13 @@ classdef UAVPathPlanning < PROBLEM
                 if segmentIdx >= numPresetPoints
                     % 如果超出范围，使用最后一个点
                     presetWaypoints(j,:) = obj.presetPath(end,:);
+                    % 映射到最后一个段（numPresetPoints-1）
+                    obj.waypointSegmentMapping(j) = numPresetPoints - 1;
                 elseif segmentIdx == 0
                     % 如果小于0，使用第一个点
                     presetWaypoints(j,:) = obj.presetPath(1,:);
+                    % 映射到第一个段（1）
+                    obj.waypointSegmentMapping(j) = 1;
                 else
                     % 在当前段内线性插值（3D插值）
                     dist1 = cumulativeLengths(segmentIdx);
@@ -649,6 +679,8 @@ classdef UAVPathPlanning < PROBLEM
                     else
                         presetWaypoints(j,:) = obj.presetPath(segmentIdx,:);
                     end
+                    % 保存对应的路径段索引（segmentIdx对应段segmentIdx到segmentIdx+1）
+                    obj.waypointSegmentMapping(j) = segmentIdx;
                 end
             end
         end
