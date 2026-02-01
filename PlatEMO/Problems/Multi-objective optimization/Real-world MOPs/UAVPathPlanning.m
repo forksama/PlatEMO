@@ -250,7 +250,7 @@ classdef UAVPathPlanning < PROBLEM
             
             % 计算扰动范围（初始种群使用更小的扰动，确保满足约束）
             % 扰动范围设为决策空间范围的1%，即约1米（比原来的5%小很多）
-            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0.01;
+            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0;
             
             % 计算最大允许距离（用于确保相邻航点距离约束）
             maxDistance = obj.velocity * obj.TTT;
@@ -265,7 +265,7 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 固定第一个和最后一个航点为预设路径的起点和终点
                 waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
-                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
+                % waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点（暂时注释）
                 
                 % 修复航点位置：将航点移出建筑物（中间航点，不包括首尾）
                 for j = 2:size(waypoints, 1)-1
@@ -292,7 +292,7 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 再次确保首尾航点固定（可能在修复过程中被改变）
                 waypoints(1, :) = obj.presetPath(1, :);
-                waypoints(end, :) = obj.presetPath(end, :);
+                % waypoints(end, :) = obj.presetPath(end, :);  % 暂时注释
                 
                 % 转换为决策变量格式（D = numWaypoints × 3）
                 % 将 numWaypoints × 3 的矩阵转换为 1 × D 的向量
@@ -333,7 +333,7 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 固定第一个和最后一个航点为预设路径的起点和终点
                 waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
-                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
+                % waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点（暂时注释）
                 
                 % 修复航点位置：将航点移出建筑物（中间航点，不包括首尾）
                 for j = 2:numWaypoints-1
@@ -346,7 +346,7 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 再次固定首尾航点（可能在边界检查后被改变）
                 waypoints(1, :) = obj.presetPath(1, :);
-                waypoints(end, :) = obj.presetPath(end, :);
+                % waypoints(end, :) = obj.presetPath(end, :);  % 暂时注释
                 
                 % 将修复后的航点转换回决策变量格式
                 PopDec(i,:) = reshape(waypoints', 1, []);
@@ -359,7 +359,8 @@ classdef UAVPathPlanning < PROBLEM
             %
             %   约束0：每个航点指向下一个航点的向量x与起点到终点的向量a的点积不能为负数
             %          （即向量x与向量a所成的角度不大于90度）
-            %   约束1：相邻航点之间的距离不能超过无人机最大速度 * TTT
+            %   约束1：连续三个航点a, b, c之间的夹角约束
+            %          （向量ab与向量bc之间的夹角不大于90度）
             %   约束2：航点不可在建筑物中
             %   约束3：两个航点间的连线不可穿过建筑物
             %
@@ -386,10 +387,10 @@ classdef UAVPathPlanning < PROBLEM
             
             % 约束数量：
             %   0. 航点方向约束（与起点到终点向量的角度约束）：numWaypoints - 1
-            %   1. 相邻航点距离约束：numWaypoints - 1
+            %   1. 连续三个航点之间的夹角约束：numWaypoints - 2（需要至少3个航点）
             %   2. 航点不在建筑物中：numWaypoints
             %   3. 连线不穿过建筑物：numWaypoints - 1
-            numConstraints = (numWaypoints - 1) + numWaypoints + (numWaypoints - 1);
+            numConstraints = (numWaypoints - 1) + max(0, numWaypoints - 2) + numWaypoints + (numWaypoints - 1);
             PopCon = zeros(N, numConstraints);
             
             for i = 1:N
@@ -398,7 +399,7 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 固定第一个和最后一个航点为预设路径的起点和终点
                 waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
-                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
+                % waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点（暂时注释）
                 
                 constraintIdx = 1;
 
@@ -421,18 +422,26 @@ classdef UAVPathPlanning < PROBLEM
                     constraintIdx = constraintIdx + 1;
                 end
                 
-                % % 约束1：检查相邻航点之间的距离约束
-                % for j = 1:numWaypoints-1
-                %     currentWP = waypoints(j, :);
-                %     nextWP = waypoints(j+1, :);
+                % 约束1：检查连续三个航点a, b, c之间的夹角约束
+                % 要求：向量ab与向量bc之间的夹角不大于90度
+                % 即：ab · bc >= 0（点积非负表示夹角不大于90度）
+                for j = 1:numWaypoints-2
+                    a = waypoints(j, :);      % 航点a
+                    b = waypoints(j+1, :);    % 航点b（a的下一个）
+                    c = waypoints(j+2, :);    % 航点c（b的下一个）
                     
-                %     % 计算当前航点到下一个航点的距离（3D距离）
-                %     distance = norm(nextWP - currentWP);
+                    % 计算向量ab和bc
+                    vector_ab = b - a;
+                    vector_bc = c - b;
                     
-                %     % 约束违反度 = max(0, distance - maxDistance)
-                %     PopCon(i, constraintIdx) = max(0, distance - maxDistance);
-                %     constraintIdx = constraintIdx + 1;
-                % end
+                    % 计算点积：ab · bc
+                    dot_product_ab_bc = dot(vector_ab, vector_bc);
+                    
+                    % 约束违反度 = max(0, -dot_product_ab_bc)
+                    % 如果dot_product_ab_bc < 0（夹角大于90度），则违反约束
+                    PopCon(i, constraintIdx) = max(0, -dot_product_ab_bc);
+                    constraintIdx = constraintIdx + 1;
+                end
                 
                 % 约束2：检查航点是否在建筑物中
                 for j = 1:numWaypoints
@@ -473,7 +482,7 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 固定第一个和最后一个航点为预设路径的起点和终点
                 waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
-                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
+                % waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点（暂时注释）
                 
                 % 目标1：最大化平均信号强度（转换为最小化负的平均信号强度）
                 avgSignal = obj.calculateAverageSignal(waypoints);
