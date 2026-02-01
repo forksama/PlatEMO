@@ -8,10 +8,9 @@ classdef UAVPathPlanning < PROBLEM
 % 在区域内随机分布着一些地面基站，在每个航点都可以求得无人机当前连接的
 % 基站的信号强度；无人机在每个航点，会根据信号强度进行是否切换的判断。
 %
-% 三个优化目标：
+% 两个优化目标：
 % 1. 最大化全程的平均信号强度（转换为最小化负的平均信号强度）
 % 2. 最小化切换次数
-% 3. 最小化偏离预设路径的距离
 %
 % 参数说明：
 % bsPerKm2 --- 100 --- 每平方公里基站数量
@@ -61,7 +60,7 @@ classdef UAVPathPlanning < PROBLEM
         %% 默认设置
         function Setting(obj)
             % 参数设置
-            if isempty(obj.M); obj.M = 3; end  % 三个目标
+            if isempty(obj.M); obj.M = 2; end  % 两个目标
             
             % 注意：D维度会自动计算，忽略用户传递的D参数
             % 保存用户可能传递的lower和upper（如果有），但会在计算D后重新设置
@@ -422,18 +421,18 @@ classdef UAVPathPlanning < PROBLEM
                     constraintIdx = constraintIdx + 1;
                 end
                 
-                % 约束1：检查相邻航点之间的距离约束
-                for j = 1:numWaypoints-1
-                    currentWP = waypoints(j, :);
-                    nextWP = waypoints(j+1, :);
+                % % 约束1：检查相邻航点之间的距离约束
+                % for j = 1:numWaypoints-1
+                %     currentWP = waypoints(j, :);
+                %     nextWP = waypoints(j+1, :);
                     
-                    % 计算当前航点到下一个航点的距离（3D距离）
-                    distance = norm(nextWP - currentWP);
+                %     % 计算当前航点到下一个航点的距离（3D距离）
+                %     distance = norm(nextWP - currentWP);
                     
-                    % 约束违反度 = max(0, distance - maxDistance)
-                    PopCon(i, constraintIdx) = max(0, distance - maxDistance);
-                    constraintIdx = constraintIdx + 1;
-                end
+                %     % 约束违反度 = max(0, distance - maxDistance)
+                %     PopCon(i, constraintIdx) = max(0, distance - maxDistance);
+                %     constraintIdx = constraintIdx + 1;
+                % end
                 
                 % 约束2：检查航点是否在建筑物中
                 for j = 1:numWaypoints
@@ -483,10 +482,6 @@ classdef UAVPathPlanning < PROBLEM
                 % 目标2：最小化切换次数
                 switchCount = obj.calculateSwitchCount(waypoints);
                 PopObj(i, 2) = switchCount;
-                
-                % 目标3：最小化偏离预设路径的距离
-                deviation = obj.calculatePathDeviation(waypoints);
-                PopObj(i, 3) = deviation;
             end
         end
         
@@ -669,7 +664,6 @@ classdef UAVPathPlanning < PROBLEM
             % 目标值范围估计：
             % - 目标1（-avgSignal）：信号强度通常在-100到-50 dBm，所以-avgSignal在50到100
             % - 目标2（switchCount）：切换次数在0到numWaypoints之间
-            % - 目标3（deviation）：偏离距离可能在0到几百米
             %
             % 使用保守的上界，确保覆盖所有可能的解
             
@@ -683,10 +677,8 @@ classdef UAVPathPlanning < PROBLEM
             %   设置参考点为200，确保覆盖所有情况
             % - 目标2（switchCount）：最坏情况每个航点都切换，最多numWaypoints次
             %   设置参考点为numWaypoints*1.5，足够大
-            % - 目标3（deviation）：最坏情况偏离可能到几百米甚至上千米
-            %   设置参考点为3000，确保覆盖所有情况
             
-            R = [150, numWaypoints, 20];
+            R = [150, numWaypoints];
             
             % 注意：如果HV仍然为0，可能是以下原因：
             % 1. 参考点仍然太小，实际解比参考点还差

@@ -35,7 +35,7 @@ fprintf('\n=== 方法3：对比两个不同目标的最优解 ===\n');
 
 if length(finalPopulation) >= 2
     % 提取所有解的目标值
-    PopObj = finalPopulation.objs;  % N×2矩阵，每行是一个解的目标值
+    PopObj = finalPopulation.objs;  % N×2矩阵，每行是一个解的目标值（两个目标）
     % 目标1：负平均信号强度（越小越好，即平均信号强度越大越好）
     % 目标2：切换次数（越小越好）
     
