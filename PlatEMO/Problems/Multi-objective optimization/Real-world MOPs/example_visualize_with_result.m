@@ -13,9 +13,16 @@ fprintf('=== 运行优化算法 ===\n');
 
 % 运行优化并保存结果
 Algorithm = MOCPSO();
-% 参数格式：{numBS, velocity, TTT, switchThreshold, obstacleMethod}
-% 如果不指定obstacleMethod，默认使用'default'
-Problem = UAVPathPlanning('N', 50, 'maxFE', 100, 'parameter', {10, 10, 1, -85, 'default'});
+% 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
+%   bsPerKm2: 每平方公里的基站数量
+%   velocity: 无人机最大速度（m/s）
+%   TTT: 时间间隔（s）
+%   switchThreshold: 切换阈值（dBm）
+%   obstacleMethod: 障碍物生成方法（0=default）
+% 如果不指定obstacleMethod，默认使用0
+% 注意：地图面积约为0.09 km²（300m x 300m），所以每平方公里基站数量会按比例计算
+% 预设路径是固定的：起点(45,45,40) -> 终点(268,223,40)，包含6个路径点
+Problem = UAVPathPlanning('N', 50, 'maxFE', 500, 'parameter', {100, 10, 1, -85, 0});
 Algorithm.Solve(Problem);
 
 % 获取最终种群
@@ -23,86 +30,70 @@ finalPopulation = Algorithm.result{end};
 fprintf('最终种群大小: %d\n', length(finalPopulation));
 fprintf('\n');
 
-%% 方法3：对比三个不同目标的最优解
-fprintf('\n=== 方法3：对比三个不同目标的最优解 ===\n');
+%% 方法3：对比两个不同目标的最优解
+fprintf('\n=== 方法3：对比两个不同目标的最优解 ===\n');
 
-if length(finalPopulation) >= 3
+if length(finalPopulation) >= 2
     % 提取所有解的目标值
-    PopObj = finalPopulation.objs;  % N×3矩阵，每行是一个解的目标值
+    PopObj = finalPopulation.objs;  % N×2矩阵，每行是一个解的目标值
     % 目标1：负平均信号强度（越小越好，即平均信号强度越大越好）
     % 目标2：切换次数（越小越好）
-    % 目标3：偏离距离（越小越好）
     
     % 找到每个目标的最优解
     [~, idx_obj1] = min(PopObj(:,1));  % 目标1最优（负信号强度最小，即信号强度最大）
     [~, idx_obj2] = min(PopObj(:,2));  % 目标2最优（切换次数最小）
-    [~, idx_obj3] = min(PopObj(:,3));  % 目标3最优（偏离距离最小）
     
     fprintf('目标1最优解索引: %d (负平均信号强度=%.4f)\n', idx_obj1, PopObj(idx_obj1,1));
     fprintf('目标2最优解索引: %d (切换次数=%.4f)\n', idx_obj2, PopObj(idx_obj2,2));
-    fprintf('目标3最优解索引: %d (偏离距离=%.4f)\n', idx_obj3, PopObj(idx_obj3,3));
     
-    % 提取三个最优解的路径（3D坐标：x, y, z）
+    % 提取两个最优解的路径（3D坐标：x, y, z）
     actualPath_obj1 = reshape(finalPopulation(idx_obj1).decs, 3, [])';
     actualPath_obj2 = reshape(finalPopulation(idx_obj2).decs, 3, [])';
-    actualPath_obj3 = reshape(finalPopulation(idx_obj3).decs, 3, [])';
     
     % 创建对比图（3D）
-    figure('Name', '三个目标最优解的路径对比', 'Position', [100, 100, 1400, 900]);
+    figure('Name', '两个目标最优解的路径对比', 'Position', [100, 100, 1400, 900]);
     
     % 加载预设路径、基站和障碍物
-    % 文件名格式：UAVPathPlanning-%s.mat（包含障碍物方法，基站数量等于建筑物数量）
-    obstacleMethod = 'default';  % 与Problem创建时使用的障碍物方法一致
-    file = sprintf('UAVPathPlanning-%s.mat', obstacleMethod);
+    % 文件名格式：UAVPathPlanning-%d-%d.mat（包含障碍物方法和每平方公里基站数量）
+    obstacleMethod = 0;  % 与Problem创建时使用的障碍物方法一致
+    bsPerKm2 = 100;    % 与Problem创建时使用的每平方公里基站数量一致
+    file = sprintf('UAVPathPlanning-%d-%d.mat', obstacleMethod, bsPerKm2);
     file = fullfile(fileparts(mfilename('fullpath')), file);
     
     if exist(file, 'file') == 2
-        load(file, 'presetPath', 'baseStations', 'obstacles');
+        % 加载数据文件（包括obstacleGridSize）
+        try
+            load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
+        catch
+            load(file, 'presetPath', 'baseStations', 'obstacles');
+            obstacleGridSize = [];
+        end
         fprintf('成功加载数据文件：%s\n', file);
         if exist('obstacles', 'var') && ~isempty(obstacles)
-            fprintf('障碍物数量：%d\n', size(obstacles, 1));
-            % 检查是否是旧格式的数据（旧格式：y=2时是20~30）
-            % 新格式：y=2时应该是30~40
-            if size(obstacles, 1) > 0
-                sample_obs = obstacles(1, :);
-                % 检查是否有建筑物在20~30范围内（这应该是旧格式）
-                has_old_format = false;
-                for i = 1:size(obstacles, 1)
-                    obs = obstacles(i, :);
-                    % 如果y范围是20~30，说明是旧格式
-                    if (obs(2) >= 19.9 && obs(2) <= 20.1 && obs(4) >= 29.9 && obs(4) <= 30.1) || ...
-                       (obs(1) >= 19.9 && obs(1) <= 20.1 && obs(3) >= 29.9 && obs(3) <= 30.1)
-                        has_old_format = true;
-                        break;
-                    end
+            % 检查障碍物格式：应该是三维数组 gridX x gridY x 5
+            if ndims(obstacles) == 3
+                [gridX, gridY, ~] = size(obstacles);
+                if isempty(obstacleGridSize)
+                    obstacleGridSize = [gridX, gridY];
                 end
-                if has_old_format
-                    warning('检测到旧格式的数据文件！建筑物位置不正确。');
-                    warning('请删除文件 %s 并重新运行，让系统生成新格式的数据。', file);
-                    fprintf('旧格式示例：ymin=20, ymax=30（应该是30~40）\n');
-                    fprintf('新格式应该是：y=1: 10~20, y=2: 30~40, y=3: 50~60, y=4: 70~80, y=5: 90~100\n');
-                end
+                numObstacles = gridX * gridY;
+                fprintf('障碍物网格大小：%d x %d，障碍物数量：%d\n', gridX, gridY, numObstacles);
+            else
+                error('障碍物格式错误：应该是三维数组 gridX x gridY x 5');
             end
         else
             fprintf('警告：文件中没有障碍物数据\n');
             obstacles = [];
+            obstacleGridSize = [];
         end
     else
-        % 如果文件不存在，尝试加载旧格式
-        oldFile = 'UAVPathPlanning-BS10.mat';
-        if exist(oldFile, 'file') == 2
-            load(oldFile, 'presetPath', 'baseStations');
-            obstacles = [];  % 旧文件可能没有障碍物数据
-            warning('加载了旧格式的数据文件：%s，基站位置可能不正确，且没有障碍物数据', oldFile);
-        else
-            error('找不到数据文件：%s 或 %s', file, oldFile);
-        end
+        error('找不到数据文件：%s', file);
     end
     
     % 检查数据维度，如果是2D则转换为3D
-    % 预设路径的z坐标设为50米（与预设路径高度一致）
+    % 预设路径的z坐标设为40米（与预设路径高度一致）
     if size(presetPath, 2) == 2
-        presetPath = [presetPath, 50*ones(size(presetPath, 1), 1)];
+        presetPath = [presetPath, 40*ones(size(presetPath, 1), 1)];
     end
     % 基站的z坐标应该已经在建筑物顶端（如果是从新格式加载）
     if size(baseStations, 2) == 2
@@ -117,26 +108,32 @@ if length(finalPopulation) >= 3
     % 绘制障碍物（建筑物）- 先绘制建筑物，这样其他元素会显示在上面
     obstacleDrawn = false;
     maxBuildingHeight = 0;  % 记录最高建筑物高度
-    if exist('obstacles', 'var') && ~isempty(obstacles) && size(obstacles, 1) > 0
-        fprintf('开始绘制 %d 个建筑物障碍物...\n', size(obstacles, 1));
-        for i = 1:size(obstacles, 1)
-            obs = obstacles(i, :);
-            x_min = obs(1);
-            y_min = obs(2);
-            x_max = obs(3);
-            y_max = obs(4);
-            height = obs(5);
-            
-            % 记录最高建筑物高度
-            if height > maxBuildingHeight
-                maxBuildingHeight = height;
-            end
-            
-            % 调试信息：打印前几个建筑物的位置
-            if i <= 5
-                fprintf('  建筑物 %d: x=[%.1f, %.1f], y=[%.1f, %.1f], 高度=%.1f米\n', ...
-                       i, x_min, x_max, y_min, y_max, height);
-            end
+    if exist('obstacles', 'var') && ~isempty(obstacles) && ndims(obstacles) == 3
+        [gridX, gridY, ~] = size(obstacles);
+        numObstacles = gridX * gridY;
+        fprintf('开始绘制 %d 个建筑物障碍物（网格：%d x %d）...\n', numObstacles, gridX, gridY);
+        obsCount = 0;
+        for x = 1:gridX
+            for y = 1:gridY
+                obs = obstacles(x, y, :);
+                obs = obs(:)';  % 转换为行向量
+                x_min = obs(1);
+                y_min = obs(2);
+                x_max = obs(3);
+                y_max = obs(4);
+                height = obs(5);
+                
+                % 记录最高建筑物高度
+                if height > maxBuildingHeight
+                    maxBuildingHeight = height;
+                end
+                
+                obsCount = obsCount + 1;
+                % 调试信息：打印前几个建筑物的位置
+                if obsCount <= 5
+                    fprintf('  建筑物 (%d,%d): x=[%.1f, %.1f], y=[%.1f, %.1f], 高度=%.1f米\n', ...
+                           x, y, x_min, x_max, y_min, y_max, height);
+                end
             
             % 使用patch绘制3D长方体
             % 定义长方体的8个顶点
@@ -161,20 +158,21 @@ if length(finalPopulation) >= 3
                 2, 3, 7, 6   % 右面
             ];
             
-            % 绘制长方体（使用patch）
-            if i == 1
-                % 第一个建筑物添加到图例
-                patch('Faces', faces, 'Vertices', vertices, ...
-                     'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
-                     'EdgeColor', 'k', 'LineWidth', 1, ...
-                     'DisplayName', '建筑物障碍物');
-                obstacleDrawn = true;
-            else
-                % 其他建筑物不添加到图例
-                patch('Faces', faces, 'Vertices', vertices, ...
-                     'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
-                     'EdgeColor', 'k', 'LineWidth', 1, ...
-                     'HandleVisibility', 'off');
+                % 绘制长方体（使用patch）
+                if obsCount == 1
+                    % 第一个建筑物添加到图例
+                    patch('Faces', faces, 'Vertices', vertices, ...
+                         'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
+                         'EdgeColor', 'k', 'LineWidth', 1, ...
+                         'DisplayName', '建筑物障碍物');
+                    obstacleDrawn = true;
+                else
+                    % 其他建筑物不添加到图例
+                    patch('Faces', faces, 'Vertices', vertices, ...
+                         'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
+                         'EdgeColor', 'k', 'LineWidth', 1, ...
+                         'HandleVisibility', 'off');
+                end
             end
         end
         fprintf('建筑物绘制完成，最高建筑物高度：%.1f米\n', maxBuildingHeight);
@@ -203,44 +201,36 @@ if length(finalPopulation) >= 3
     
     % 重新计算切换次数以确保一致性（使用相同的Problem对象和参数）
     % 使用优化时的Problem对象，确保参数一致
-    fprintf('重新计算三个最优解的切换次数以确保一致性...\n');
+    fprintf('重新计算两个最优解的切换次数以确保一致性...\n');
     switchCount_obj1 = Problem.calculateSwitchCount(actualPath_obj1);
     switchCount_obj2 = Problem.calculateSwitchCount(actualPath_obj2);
-    switchCount_obj3 = Problem.calculateSwitchCount(actualPath_obj3);
     
     fprintf('  目标1最优：切换次数=%.1f (原值=%.1f)\n', switchCount_obj1, PopObj(idx_obj1,2));
     fprintf('  目标2最优：切换次数=%.1f (原值=%.1f)\n', switchCount_obj2, PopObj(idx_obj2,2));
-    fprintf('  目标3最优：切换次数=%.1f (原值=%.1f)\n', switchCount_obj3, PopObj(idx_obj3,2));
     
-    % 绘制三个目标的最优解（3D）
+    % 绘制两个目标的最优解（3D）
     % 目标1最优：信号强度最大（绿色）
     plot3(actualPath_obj1(:,1), actualPath_obj1(:,2), actualPath_obj1(:,3), 'g-s', ...
          'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'g', ...
-         'DisplayName', sprintf('目标1最优（信号强度最大）\n负信号强度=%.2f, 切换次数=%.1f, 偏离距离=%.2f', ...
-                                PopObj(idx_obj1,1), switchCount_obj1, PopObj(idx_obj1,3)));
+         'DisplayName', sprintf('目标1最优（信号强度最大）\n负信号强度=%.2f, 切换次数=%.1f', ...
+                                PopObj(idx_obj1,1), switchCount_obj1));
     
     % 目标2最优：切换次数最小（品红色）
     plot3(actualPath_obj2(:,1), actualPath_obj2(:,2), actualPath_obj2(:,3), 'm-d', ...
          'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'm', ...
-         'DisplayName', sprintf('目标2最优（切换次数最小）\n负信号强度=%.2f, 切换次数=%.1f, 偏离距离=%.2f', ...
-                                PopObj(idx_obj2,1), switchCount_obj2, PopObj(idx_obj2,3)));
-    
-    % 目标3最优：偏离距离最小（青色）
-    plot3(actualPath_obj3(:,1), actualPath_obj3(:,2), actualPath_obj3(:,3), 'c-p', ...
-         'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'c', ...
-         'DisplayName', sprintf('目标3最优（偏离距离最小）\n负信号强度=%.2f, 切换次数=%.1f, 偏离距离=%.2f', ...
-                                PopObj(idx_obj3,1), switchCount_obj3, PopObj(idx_obj3,3)));
+         'DisplayName', sprintf('目标2最优（切换次数最小）\n负信号强度=%.2f, 切换次数=%.1f', ...
+                                PopObj(idx_obj2,1), switchCount_obj2));
     
     xlabel('X坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
     ylabel('Y坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
     zlabel('Z坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
-    title('三个目标最优解的路径对比（3D）', 'FontSize', 14, 'FontWeight', 'bold');
+    title('两个目标最优解的路径对比（3D）', 'FontSize', 14, 'FontWeight', 'bold');
     legend('Location', 'best', 'FontSize', 9);
     grid on;
     axis equal;
-    xlim([-5, 105]);
-    ylim([-5, 105]);
-    % zlim需要覆盖建筑物高度（20~80米）和基站高度，设置为-5到90米
+    xlim([-5, 505]);  % 地图范围0-300米
+    ylim([-5, 505]);  % 地图范围0-300米
+    % zlim需要覆盖建筑物高度和基站高度，设置为-5到90米
     if obstacleDrawn && maxBuildingHeight > 0
         zlim([-5, max(maxBuildingHeight + 10, 90)]);  % 至少到最高建筑物+10米
     else
@@ -258,20 +248,20 @@ if length(finalPopulation) >= 3
     
     hold off;
     
-    %% 为三个最优解分别创建单独的图，显示每个航点连接的基站
-    fprintf('\n=== 创建三个最优解的单独路径图 ===\n');
+    %% 为两个最优解分别创建单独的图，显示每个航点连接的基站
+    fprintf('\n=== 创建两个最优解的单独路径图 ===\n');
     
     % 使用优化时的Problem对象，确保参数一致（特别是switchThreshold）
     % 不需要重新创建，直接使用优化时的Problem对象
     
     % 为每个最优解创建单独的图
-    paths = {actualPath_obj1, actualPath_obj2, actualPath_obj3};
-    pathNames = {'目标1最优（信号强度最大）', '目标2最优（切换次数最小）', '目标3最优（偏离距离最小）'};
-    pathColors = {'g', 'm', 'c'};
-    pathMarkers = {'s', 'd', 'p'};
-    pathIndices = [idx_obj1, idx_obj2, idx_obj3];
+    paths = {actualPath_obj1, actualPath_obj2};
+    pathNames = {'目标1最优（信号强度最大）', '目标2最优（切换次数最小）'};
+    pathColors = {'g', 'm'};
+    pathMarkers = {'s', 'd'};
+    pathIndices = [idx_obj1, idx_obj2];
     
-    for pathIdx = 1:3
+    for pathIdx = 1:2
         currentPath = paths{pathIdx};
         currentName = pathNames{pathIdx};
         currentColor = pathColors{pathIdx};
@@ -406,45 +396,51 @@ if length(finalPopulation) >= 3
         hold on;
         
         % 绘制障碍物（建筑物）
-        if exist('obstacles', 'var') && ~isempty(obstacles) && size(obstacles, 1) > 0
-            for i = 1:size(obstacles, 1)
-                obs = obstacles(i, :);
-                x_min = obs(1);
-                y_min = obs(2);
-                x_max = obs(3);
-                y_max = obs(4);
-                height = obs(5);
-                
-                vertices = [
-                    x_min, y_min, 0;
-                    x_max, y_min, 0;
-                    x_max, y_max, 0;
-                    x_min, y_max, 0;
-                    x_min, y_min, height;
-                    x_max, y_min, height;
-                    x_max, y_max, height;
-                    x_min, y_max, height
-                ];
-                
-                faces = [
-                    1, 2, 3, 4;
-                    5, 6, 7, 8;
-                    1, 2, 6, 5;
-                    3, 4, 8, 7;
-                    1, 4, 8, 5;
-                    2, 3, 7, 6
-                ];
-                
-                if i == 1
-                    patch('Faces', faces, 'Vertices', vertices, ...
-                         'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
-                         'EdgeColor', 'k', 'LineWidth', 1, ...
-                         'DisplayName', '建筑物障碍物');
-                else
-                    patch('Faces', faces, 'Vertices', vertices, ...
-                         'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
-                         'EdgeColor', 'k', 'LineWidth', 1, ...
-                         'HandleVisibility', 'off');
+        if exist('obstacles', 'var') && ~isempty(obstacles) && ndims(obstacles) == 3
+            [gridX, gridY, ~] = size(obstacles);
+            obsCount = 0;
+            for x = 1:gridX
+                for y = 1:gridY
+                    obs = obstacles(x, y, :);
+                    obs = obs(:)';  % 转换为行向量
+                    x_min = obs(1);
+                    y_min = obs(2);
+                    x_max = obs(3);
+                    y_max = obs(4);
+                    height = obs(5);
+                    
+                    vertices = [
+                        x_min, y_min, 0;
+                        x_max, y_min, 0;
+                        x_max, y_max, 0;
+                        x_min, y_max, 0;
+                        x_min, y_min, height;
+                        x_max, y_min, height;
+                        x_max, y_max, height;
+                        x_min, y_max, height
+                    ];
+                    
+                    faces = [
+                        1, 2, 3, 4;
+                        5, 6, 7, 8;
+                        1, 2, 6, 5;
+                        3, 4, 8, 7;
+                        1, 4, 8, 5;
+                        2, 3, 7, 6
+                    ];
+                    
+                    obsCount = obsCount + 1;
+                    if obsCount == 1
+                        patch('Faces', faces, 'Vertices', vertices, ...
+                             'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
+                             'EdgeColor', 'k', 'LineWidth', 1, ...
+                             'DisplayName', '建筑物障碍物');
+                    else
+                        patch('Faces', faces, 'Vertices', vertices, ...
+                             'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
+                             'EdgeColor', 'k', 'LineWidth', 1, ...
+                             'HandleVisibility', 'off');
+                    end
                 end
             end
         end
@@ -504,8 +500,8 @@ if length(finalPopulation) >= 3
         ylabel('Y坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
         zlabel('Z坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
         % 使用重新计算的切换次数
-        title(sprintf('%s\n负信号强度=%.2f, 切换次数=%.1f, 偏离距离=%.2f', ...
-                     currentName, currentPopObj(1), switchCount_current, currentPopObj(3)), ...
+        title(sprintf('%s\n负信号强度=%.2f, 切换次数=%.1f', ...
+                     currentName, currentPopObj(1), switchCount_current), ...
               'FontSize', 14, 'FontWeight', 'bold');
         
         % 创建图例
@@ -518,10 +514,20 @@ if length(finalPopulation) >= 3
         
         grid on;
         axis equal;
-        xlim([-5, 105]);
-        ylim([-5, 105]);
-        if exist('obstacles', 'var') && ~isempty(obstacles) && size(obstacles, 1) > 0
-            maxHeight = max(obstacles(:, 5));
+        xlim([-5, 305]);  % 地图范围0-300米
+        ylim([-5, 305]);  % 地图范围0-300米
+        if exist('obstacles', 'var') && ~isempty(obstacles) && ndims(obstacles) == 3
+            % 找到最高建筑物高度
+            maxHeight = 0;
+            [gridX, gridY, ~] = size(obstacles);
+            for x = 1:gridX
+                for y = 1:gridY
+                    height = obstacles(x, y, 5);
+                    if height > maxHeight
+                        maxHeight = height;
+                    end
+                end
+            end
             zlim([-5, max(maxHeight + 10, 90)]);
         else
             zlim([-5, 90]);
@@ -533,22 +539,16 @@ if length(finalPopulation) >= 3
         fprintf('  %s 图已创建\n', currentName);
     end
     
-    % 打印三个解的完整目标值信息
-    fprintf('\n三个最优解的完整目标值：\n');
+    % 打印两个解的完整目标值信息
+    fprintf('\n两个最优解的完整目标值：\n');
     fprintf('  目标1最优解：\n');
     fprintf('    负平均信号强度: %.4f\n', PopObj(idx_obj1,1));
     fprintf('    切换次数: %.1f\n', PopObj(idx_obj1,2));
-    fprintf('    偏离距离: %.4f\n', PopObj(idx_obj1,3));
     fprintf('  目标2最优解：\n');
     fprintf('    负平均信号强度: %.4f\n', PopObj(idx_obj2,1));
     fprintf('    切换次数: %.1f\n', PopObj(idx_obj2,2));
-    fprintf('    偏离距离: %.4f\n', PopObj(idx_obj2,3));
-    fprintf('  目标3最优解：\n');
-    fprintf('    负平均信号强度: %.4f\n', PopObj(idx_obj3,1));
-    fprintf('    切换次数: %.1f\n', PopObj(idx_obj3,2));
-    fprintf('    偏离距离: %.4f\n', PopObj(idx_obj3,3));
 else
-    fprintf('种群大小不足，无法进行对比（需要至少3个解）\n');
+    fprintf('种群大小不足，无法进行对比（需要至少2个解）\n');
 end
 
 fprintf('\n所有示例完成！\n');

@@ -14,11 +14,11 @@ classdef UAVPathPlanning < PROBLEM
 % 3. 最小化偏离预设路径的距离
 %
 % 参数说明：
-% numBS --- 10 --- 基站数量（已废弃，基站数量现在等于建筑物数量，每个建筑物顶部都有一个基站）
+% bsPerKm2 --- 100 --- 每平方公里基站数量
 % velocity --- 10 --- 无人机最大速度（m/s）
 % TTT --- 1 --- 时间间隔（s）
 % switchThreshold --- -80 --- 切换阈值（dBm）
-% obstacleMethod --- 'default' --- 障碍物与预设路径生成方法（字符串）
+% obstacleMethod --- 0 --- 障碍物与预设路径生成方法（固定为0，基于αβγ的方法）
 % 
 % 注意：航点数量不再由用户指定，而是根据预设路径总长度和
 %       无人机速度自动计算：numWaypoints = pathLength / (velocity * 0.8 * TTT)
@@ -36,12 +36,16 @@ classdef UAVPathPlanning < PROBLEM
     properties(Access = private)
         presetPath;      % 预设路径（N_preset x 3，包含x, y, z坐标）
         baseStations;    % 基站位置（numBS x 3，包含x, y, z坐标）
-        obstacles;       % 障碍物信息（N_obstacle x 5，每行：[x_min, y_min, x_max, y_max, height]）
+        obstacles;       % 障碍物信息（二维数组：gridX x gridY x 5，obstacles(x, y, :) = [x_min, y_min, x_max, y_max, height]）
+        obstacleGridSize; % 障碍物网格大小 [gridX, gridY]
         velocity;        % 无人机最大速度（m/s）
         TTT;             % 时间间隔（s）
         numBS;           % 基站数量
         switchThreshold; % 切换阈值（dBm）
-        obstacleMethod;  % 障碍物与预设路径生成方法（字符串）
+        obstacleMethod;  % 障碍物与预设路径生成方法（固定为0，基于αβγ的方法）
+        alpha;           % 城市密度比（建筑总面积与土地总面积的比值，0.1~0.5）
+        beta;            % 建筑密度（单位土地面积内的建筑物数量，300~750 栋/km²）
+        gamma;           % 建筑高度的瑞利分布参数（8~50m）
         pathLength;      % 预设路径总长度
         numWaypoints;    % 航点数量（自动计算）
         presetWaypoints; % 预设航点位置（在预设路径上均匀分布，numWaypoints x 3）
@@ -51,6 +55,7 @@ classdef UAVPathPlanning < PROBLEM
         %% 获取切换阈值（公共方法）
         function threshold = getSwitchThreshold(obj)
             threshold = obj.switchThreshold;
+            
         end
         
         %% 默认设置
@@ -64,48 +69,77 @@ classdef UAVPathPlanning < PROBLEM
             userUpper = obj.upper;
             
             % 获取参数（使用ParameterSet获取，如果obj.parameter被指定则使用，否则使用默认值）
-            % 参数格式：{numBS, velocity, TTT, switchThreshold, obstacleMethod}
+            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
+            %   bsPerKm2: 每平方公里的基站数量
+            %   velocity: 无人机最大速度（m/s）
+            %   TTT: 时间间隔（s）
+            %   switchThreshold: 切换阈值（dBm）
+            %   obstacleMethod: 障碍物生成方法（固定为0，基于αβγ的方法，固定α=0.3, β=500, γ=40）
             % 注意：不再需要numWaypoints参数，航点数量将自动计算
             if isempty(obj.parameter)
-                numBS = 10;
+                bsPerKm2 = 10;  % 默认每平方公里10个基站
                 velocity = 10;
                 TTT = 1;
                 switchThreshold = -80;
-                obstacleMethod = 'default';
+                obstacleMethod = 0;  % 0 = 基于αβγ的新方法
             else
                 params = obj.parameter;
                 if iscell(params) && length(params) >= 4
-                    numBS = params{1};
+                    bsPerKm2 = params{1};  % 每平方公里基站数量
                     velocity = params{2};
                     TTT = params{3};
                     switchThreshold = params{4};
                     if length(params) >= 5
                         obstacleMethod = params{5};
+                        % 只支持method=0，其他值将被忽略并使用默认值0
+                        if obstacleMethod ~= 0
+                            warning('UAVPathPlanning:只支持obstacleMethod=0，已自动设置为0');
+                            obstacleMethod = 0;
+                        end
                     else
-                        obstacleMethod = 'default';
+                        obstacleMethod = 0;
                     end
                 else
-                    numBS = 10;
+                    bsPerKm2 = 10;  % 默认每平方公里10个基站
                     velocity = 10;
                     TTT = 1;
                     switchThreshold = -80;
-                    obstacleMethod = 'default';
+                    obstacleMethod = 0;
                 end
             end
             
-            obj.numBS = numBS;
+            % 固定使用α=0.3, β=500, γ=40
+            alpha = 0.3;  % 城市密度比
+            beta = 500;   % 建筑密度（栋/km²）
+            gamma = 40;   % 瑞利分布参数（m）
+            
             obj.velocity = velocity;
             obj.TTT = TTT;
             obj.switchThreshold = switchThreshold;
             obj.obstacleMethod = obstacleMethod;
             
+            % 保存建筑物建模参数（用于生成和加载）
+            obj.alpha = alpha;
+            obj.beta = beta;
+            obj.gamma = gamma;
+            
             % 生成或加载预设路径、基站位置和障碍物
-            % 注意：基站数量等于建筑物数量，文件名使用obstacleMethod标识
-            file = sprintf('UAVPathPlanning-%s.mat', obstacleMethod);
+            % 文件名使用obstacleMethod和bsPerKm2标识，以便不同参数配置使用不同文件
+            file = sprintf('UAVPathPlanning-%d-%d.mat', obstacleMethod, bsPerKm2);
             file = fullfile(fileparts(mfilename('fullpath')), file);
             
             if exist(file, 'file') == 2
-                load(file, 'presetPath', 'baseStations', 'obstacles');
+                % 加载数据文件（尝试加载obstacleGridSize，如果不存在也不会报错）
+                try
+                    load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
+                    if exist('obstacleGridSize', 'var') && ~isempty(obstacleGridSize)
+                        obj.obstacleGridSize = obstacleGridSize;
+                    end
+                catch
+                    % 如果obstacleGridSize不存在，只加载其他变量
+                    load(file, 'presetPath', 'baseStations', 'obstacles');
+                end
+                
                 % 检查数据维度，如果是2D则转换为3D
                 if size(presetPath, 2) == 2
                     presetPath = [presetPath, 50*ones(size(presetPath, 1), 1)];  % 添加z坐标，默认50米
@@ -116,18 +150,25 @@ classdef UAVPathPlanning < PROBLEM
                 % 如果没有障碍物数据，生成默认障碍物
                 if ~exist('obstacles', 'var') || isempty(obstacles)
                     obstacles = obj.generateObstacles(obstacleMethod);
-                    baseStations = obj.generateBaseStationsOnObstacles(numBS, obstacles);
-                    save(file, 'presetPath', 'baseStations', 'obstacles', '-append');
+                    baseStations = obj.generateBaseStationsUniform(bsPerKm2, obstacles);
+                    obstacleGridSize = obj.obstacleGridSize;
+                    save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', '-append');
+                else
+                    % 新格式：如果obstacleGridSize未加载，从obstacles维度推断
+                    if isempty(obj.obstacleGridSize)
+                        obj.obstacleGridSize = [size(obstacles, 1), size(obstacles, 2)];
+                    end
                 end
             else
                 % 生成预设路径和障碍物（根据obstacleMethod）
                 [presetPath, obstacles] = obj.generatePresetPathAndObstacles(obstacleMethod);
                 
-                % 在建筑物顶端生成基站位置
-                baseStations = obj.generateBaseStationsOnObstacles(numBS, obstacles);
+                % 在建筑物顶端生成基站位置（基于每平方公里基站数量）
+                baseStations = obj.generateBaseStationsUniform(bsPerKm2, obstacles);
                 
-                % 保存数据
-                save(file, 'presetPath', 'baseStations', 'obstacles');
+                % 保存数据（包括网格大小）
+                obstacleGridSize = obj.obstacleGridSize;
+                save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
             end
             
             obj.obstacles = obstacles;
@@ -146,7 +187,7 @@ classdef UAVPathPlanning < PROBLEM
             
             % 根据预设路径总长度和无人机速度自动计算航点数量
             % 假设无人机以最大速度的0.8倍运动
-            actualVelocity = obj.velocity * 0.8;
+            actualVelocity = obj.velocity * 0.5;
             distancePerWaypoint = actualVelocity * obj.TTT;  % 每个航点之间的距离
             obj.numWaypoints = max(2, ceil(obj.pathLength / distancePerWaypoint));  % 至少2个航点
             
@@ -162,7 +203,7 @@ classdef UAVPathPlanning < PROBLEM
             if ~isempty(userLower) && isequal(size(userLower), [1, obj.D])
                 obj.lower = userLower;
             else
-                % 默认下界：x, y在0-100，z在30-70米（高度范围，预设路径在50米左右）
+                % 默认下界：x, y在0-300（根据预设路径范围），z在30-70米（高度范围，预设路径在40米左右）
                 obj.lower = zeros(1, obj.D);
                 % z坐标的下界设为30米（允许一定的高度变化范围）
                 for i = 3:3:obj.D
@@ -173,8 +214,8 @@ classdef UAVPathPlanning < PROBLEM
             if ~isempty(userUpper) && isequal(size(userUpper), [1, obj.D])
                 obj.upper = userUpper;
             else
-                % 默认上界：x, y在0-100，z在30-70米（高度范围，预设路径在50米左右）
-                obj.upper = 100 * ones(1, obj.D);
+                % 默认上界：x, y在0-300（根据预设路径范围），z在30-70米（高度范围，预设路径在40米左右）
+                obj.upper = 500 * ones(1, obj.D);
                 % z坐标的上界设为70米（允许一定的高度变化范围）
                 for i = 3:3:obj.D
                     obj.upper(i) = 70;
@@ -208,25 +249,217 @@ classdef UAVPathPlanning < PROBLEM
             % 基于预设航点生成初始种群
             PopDec = zeros(N, obj.D);
             
-            % 计算扰动范围（可以根据问题规模调整）
-            % 扰动范围设为决策空间范围的5%，即约5米
-            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0.05;
+            % 计算扰动范围（初始种群使用更小的扰动，确保满足约束）
+            % 扰动范围设为决策空间范围的1%，即约1米（比原来的5%小很多）
+            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0.01;
+            
+            % 计算最大允许距离（用于确保相邻航点距离约束）
+            maxDistance = obj.velocity * obj.TTT;
             
             for i = 1:N
-                % 以presetWaypoints为基础，添加随机扰动
+                % 以presetWaypoints为基础，添加小的随机扰动
                 waypoints = obj.presetWaypoints + randn(size(obj.presetWaypoints)) * perturbationRange;
                 
                 % 限制在边界内（3D坐标：x, y, z）
                 waypoints = max(waypoints, repmat(obj.lower(1:3), size(waypoints, 1), 1));
                 waypoints = min(waypoints, repmat(obj.upper(1:3), size(waypoints, 1), 1));
                 
+                % 固定第一个和最后一个航点为预设路径的起点和终点
+                waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
+                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
+                
+                % 修复航点位置：将航点移出建筑物（中间航点，不包括首尾）
+                for j = 2:size(waypoints, 1)-1
+                    waypoints(j, :) = obj.repairWaypointOutsideObstacle(waypoints(j, :));
+                end
+                
+                % 确保相邻航点距离不超过最大允许距离
+                % 如果距离超过限制，将下一个航点调整到可到达的位置
+                for j = 1:size(waypoints, 1)-1
+                    currentWP = waypoints(j, :);
+                    nextWP = waypoints(j+1, :);
+                    distance = norm(nextWP - currentWP);
+                    
+                    if distance > maxDistance
+                        % 将下一个航点调整到可到达的位置
+                        direction = (nextWP - currentWP) / distance;
+                        waypoints(j+1, :) = currentWP + direction * maxDistance;
+                        
+                        % 确保修复后的航点在边界内
+                        waypoints(j+1, :) = max(waypoints(j+1, :), obj.lower(1:3));
+                        waypoints(j+1, :) = min(waypoints(j+1, :), obj.upper(1:3));
+                    end
+                end
+                
+                % 再次确保首尾航点固定（可能在修复过程中被改变）
+                waypoints(1, :) = obj.presetPath(1, :);
+                waypoints(end, :) = obj.presetPath(end, :);
+                
                 % 转换为决策变量格式（D = numWaypoints × 3）
                 % 将 numWaypoints × 3 的矩阵转换为 1 × D 的向量
                 PopDec(i,:) = reshape(waypoints', 1, []);
             end
             
+            % 使用CalDec进一步修复，确保所有约束都满足
+            PopDec = obj.CalDec(PopDec);
+            
             % 创建SOLUTION对象
             Population = SOLUTION(PopDec);
+        end
+        
+        %% 修复无效解（确保首尾航点固定，并将航点移出建筑物）
+        function PopDec = CalDec(obj, PopDec)
+            %CalDec - 修复无效解，确保首尾航点固定，并将航点移出建筑物
+            %
+            %   修复策略：
+            %   1. 调用父类的CalDec方法，确保决策变量在边界内
+            %   2. 固定第一个和最后一个航点为预设路径的起点和终点
+            %   3. 将航点移出建筑物（如果航点在建筑物内）
+            %
+            %   输入：
+            %       PopDec - 决策变量矩阵（N x D）
+            %   输出：
+            %       PopDec - 修复后的决策变量矩阵
+            
+            % 先调用父类的CalDec方法，确保决策变量在边界内
+            PopDec = CalDec@PROBLEM(obj, PopDec);
+            
+            [N, D] = size(PopDec);
+            numWaypoints = D / 3;
+            
+            % 固定第一个和最后一个航点为预设路径的起点和终点，并修复航点位置
+            for i = 1:N
+                % 提取航点坐标（3D：x, y, z）
+                waypoints = reshape(PopDec(i,:), 3, numWaypoints)';  % numWaypoints x 3
+                
+                % 固定第一个和最后一个航点为预设路径的起点和终点
+                waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
+                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
+                
+                % 修复航点位置：将航点移出建筑物（中间航点，不包括首尾）
+                for j = 2:numWaypoints-1
+                    waypoints(j, :) = obj.repairWaypointOutsideObstacle(waypoints(j, :));
+                end
+                
+                % 确保修复后的航点在边界内
+                waypoints = max(waypoints, repmat(obj.lower(1:3), size(waypoints, 1), 1));
+                waypoints = min(waypoints, repmat(obj.upper(1:3), size(waypoints, 1), 1));
+                
+                % 再次固定首尾航点（可能在边界检查后被改变）
+                waypoints(1, :) = obj.presetPath(1, :);
+                waypoints(end, :) = obj.presetPath(end, :);
+                
+                % 将修复后的航点转换回决策变量格式
+                PopDec(i,:) = reshape(waypoints', 1, []);
+            end
+        end
+        
+        %% 计算约束违反度
+        function PopCon = CalCon(obj, PopDec)
+            %CalCon - 计算约束违反度
+            %
+            %   约束0：每个航点指向下一个航点的向量x与起点到终点的向量a的点积不能为负数
+            %          （即向量x与向量a所成的角度不大于90度）
+            %   约束1：相邻航点之间的距离不能超过无人机最大速度 * TTT
+            %   约束2：航点不可在建筑物中
+            %   约束3：两个航点间的连线不可穿过建筑物
+            %
+            %   约束违反度 = max(0, violation)
+            %   如果 violation <= 0，约束违反度为0（满足约束）
+            %   如果 violation > 0，约束违反度 > 0（违反约束）
+            %
+            %   输入：
+            %       PopDec - 决策变量矩阵（N x D）
+            %   输出：
+            %       PopCon - 约束违反度矩阵（N x numConstraints）
+            %               每行是一个解的约束违反度，每列是一个约束
+            
+            [N, D] = size(PopDec);
+            numWaypoints = D / 3;
+
+            % 计算起点到终点的向量a（3D向量）
+            startPoint = obj.presetPath(1, :);  % 起点
+            endPoint = obj.presetPath(end, :);  % 终点
+            vector_a = endPoint - startPoint;  % 起点到终点的向量
+            
+            % 计算最大允许距离（无人机最大速度 * TTT）
+            maxDistance = obj.velocity * obj.TTT;
+            
+            % 约束数量：
+            %   0. 航点方向约束（与起点到终点向量的角度约束）：numWaypoints - 1
+            %   1. 相邻航点距离约束：numWaypoints - 1
+            %   2. 航点不在建筑物中：numWaypoints
+            %   3. 连线不穿过建筑物：numWaypoints - 1
+            numConstraints = (numWaypoints - 1) + numWaypoints + (numWaypoints - 1);
+            PopCon = zeros(N, numConstraints);
+            
+            for i = 1:N
+                % 提取航点坐标（3D：x, y, z）
+                waypoints = reshape(PopDec(i,:), 3, numWaypoints)';  % numWaypoints x 3
+                
+                % 固定第一个和最后一个航点为预设路径的起点和终点
+                waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
+                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
+                
+                constraintIdx = 1;
+
+                                
+                % 约束0：检查每个航点指向下一个航点的向量x与向量a的点积
+                % 要求：x · a >= 0（角度不大于90度）
+                for j = 1:numWaypoints-1
+                    currentWP = waypoints(j, :);
+                    nextWP = waypoints(j+1, :);
+                    
+                    % 计算当前航点指向下一个航点的向量x（3D向量）
+                    vector_x = nextWP - currentWP;
+                    
+                    % 计算点积：x · a
+                    dot_product = dot(vector_x, vector_a);
+                    
+                    % 约束违反度 = max(0, -dot_product)
+                    % 如果dot_product < 0（角度大于90度），则违反约束
+                    PopCon(i, constraintIdx) = max(0, -dot_product);
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束1：检查相邻航点之间的距离约束
+                for j = 1:numWaypoints-1
+                    currentWP = waypoints(j, :);
+                    nextWP = waypoints(j+1, :);
+                    
+                    % 计算当前航点到下一个航点的距离（3D距离）
+                    distance = norm(nextWP - currentWP);
+                    
+                    % 约束违反度 = max(0, distance - maxDistance)
+                    PopCon(i, constraintIdx) = max(0, distance - maxDistance);
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束2：检查航点是否在建筑物中
+                for j = 1:numWaypoints
+                    waypoint = waypoints(j, :);
+                    violation = obj.checkWaypointInObstacle(waypoint);
+                    % 确保违反度非负（虽然checkWaypointInObstacle应该返回非负值，但为了保险起见）
+                    PopCon(i, constraintIdx) = max(0, violation);
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束3：检查连线是否穿过建筑物
+                for j = 1:numWaypoints-1
+                    currentWP = waypoints(j, :);
+                    nextWP = waypoints(j+1, :);
+                    
+                    violation = obj.checkSegmentIntersectsObstacle(currentWP, nextWP);
+                    % 确保违反度非负（虽然checkSegmentIntersectsObstacle应该返回非负值，但为了保险起见）
+                    PopCon(i, constraintIdx) = max(0, violation);
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 验证：确保constraintIdx - 1 == numConstraints（调试用，可以注释掉）
+                % if constraintIdx - 1 ~= numConstraints
+                %     warning('UAVPathPlanning:CalCon', '约束数量不匹配！期望 %d，实际 %d', numConstraints, constraintIdx - 1);
+                % end
+            end
         end
         
         %% 计算目标函数值
@@ -238,6 +471,10 @@ classdef UAVPathPlanning < PROBLEM
             for i = 1:N
                 % 提取航点坐标（3D：x, y, z）
                 waypoints = reshape(PopDec(i,:), 3, numWaypoints)';  % numWaypoints x 3
+                
+                % 固定第一个和最后一个航点为预设路径的起点和终点
+                waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
+                waypoints(end, :) = obj.presetPath(end, :);  % 最后一个航点 = 预设路径终点
                 
                 % 目标1：最大化平均信号强度（转换为最小化负的平均信号强度）
                 avgSignal = obj.calculateAverageSignal(waypoints);
@@ -415,114 +652,80 @@ classdef UAVPathPlanning < PROBLEM
         %% 生成用于超体积计算的参考点
         function R = GetOptimum(obj, N)
             % 返回参考点（用于超体积计算）
-            % HV计算逻辑：
-            % - fmin = min(min(PopObj,[],1), zeros(1,M))  % 取实际最小值和0的较小者
-            % - fmax = max(optimum,[],1)                   % 从optimum取最大值作为上界
-            % - 归一化：(PopObj - fmin) / ((fmax - fmin) * 1.1)
-            % - 删除任何维度>1的点（归一化后）
+            % 
+            % HV计算逻辑（在Metrics/HV.m中）：
+            % 1. fmin = min(min(PopObj,[],1), zeros(1,M))  % 取实际最小值和0的较小者
+            % 2. fmax = max(optimum,[],1)                   % 从optimum取最大值作为上界
+            % 3. 归一化：(PopObj - fmin) / ((fmax - fmin) * 1.1)
+            % 4. 删除任何归一化后>1的点：PopObj(any(PopObj>1,2),:) = []
             %
-            % 关键：参考点必须比所有实际解都"差"（所有目标值都更大）
-            % 对于最小化问题，参考点应该是所有目标的上界
+            % 关键问题：如果参考点设置得太小，归一化后所有点都可能>1，导致全部被删除，HV=0
+            %
+            % 参考点设置原则：
+            % - 必须比所有可能的解都"差"（所有目标值都更大）
+            % - 对于最小化问题，参考点应该是所有目标的上界
+            % - 需要足够大，确保归一化后所有解都<=1
+            %
+            % 目标值范围估计：
+            % - 目标1（-avgSignal）：信号强度通常在-100到-50 dBm，所以-avgSignal在50到100
+            % - 目标2（switchCount）：切换次数在0到numWaypoints之间
+            % - 目标3（deviation）：偏离距离可能在0到几百米
+            %
+            % 使用保守的上界，确保覆盖所有可能的解
             
             numWaypoints = obj.numWaypoints;
             
-            % 设置足够大的参考点，确保覆盖所有可能的解
-            % 使用非常保守的上界，避免归一化后解被删除
-            % 目标1（负信号强度，越小越好）：设为50（比任何可能的负值都大）
-            % 目标2（切换次数，越小越好）：设为航点数*3（足够大）
-            % 目标3（偏离距离，越小越好）：设为1000（足够大）
+            % 设置足够大的参考点（比所有可能的解都差）
+            % 注意：参考点必须比所有实际解都差，否则归一化后解会被删除，导致HV=0
+            %
+            % 目标值范围估计（保守估计）：
+            % - 目标1（-avgSignal）：最差情况信号强度可能到-120 dBm，所以-avgSignal可能到120
+            %   设置参考点为200，确保覆盖所有情况
+            % - 目标2（switchCount）：最坏情况每个航点都切换，最多numWaypoints次
+            %   设置参考点为numWaypoints*1.5，足够大
+            % - 目标3（deviation）：最坏情况偏离可能到几百米甚至上千米
+            %   设置参考点为3000，确保覆盖所有情况
             
-            R = [50, numWaypoints * 3, 1000];
+            R = [150, numWaypoints, 20];
+            
+            % 注意：如果HV仍然为0，可能是以下原因：
+            % 1. 参考点仍然太小，实际解比参考点还差
+            % 2. 目标值的实际范围超出了预期
+            % 建议：在算法运行后检查实际目标值范围，然后调整参考点
         end
         
         %% 生成预设路径和障碍物
         function [presetPath, obstacles] = generatePresetPathAndObstacles(obj, method)
-            % 根据方法名称生成预设路径和障碍物
+            % 生成预设路径和障碍物
+            % method: 固定为0（基于αβγ的方法）
             
-            if strcmpi(method, 'default')
-                % 生成障碍物
-                obstacles = obj.generateObstacles(method);
-                
-                % 生成预设路径
-                presetPath = obj.generatePresetPath(method);
-            else
-                % 其他方法可以在这里扩展
-                error('未知的障碍物与预设路径生成方法: %s', method);
-            end
+            % 生成障碍物
+            obstacles = obj.generateObstacles(method);
+            
+            % 生成预设路径
+            presetPath = obj.generatePresetPath(method);
         end
         
         %% 生成预设路径
         function presetPath = generatePresetPath(obj, method)
-            % 生成预设路径
-            % 起点：(5, 5, 50)
-            % 终点：(85, 85, 50)
-            % 中间转折点：随机生成(20(m+0.5)-5, 20(n+0.5)-5, 50)，0<=m,n<=4
-            % 要求：路径不交叉，没有重复点
-            % 转折点数量由算法自动确定（包含所有可能的中间点）
+            % 生成预设路径（固定路径）
             
-            if strcmpi(method, 'default')
-                % 计算可能的中间点坐标
-                % 20(m+0.5)-5 = 20m + 10 - 5 = 20m + 5
-                % 当m=0: 5, m=1: 25, m=2: 45, m=3: 65, m=4: 85
-                % 当m=5: 105（超出范围），所以m,n的范围应该是0<=m,n<=4
-                
-                possible_x = 20 * (0:4) + 5;  % [5, 25, 45, 65, 85]
-                possible_y = 20 * (0:4) + 5;  % [5, 25, 45, 65, 85]
-                
-                % 起点和终点
-                start_point = [5, 5, 50];
-                end_point = [85, 85, 50];
-                
-                % 生成所有可能的中间点（排除起点和终点）
-                [X, Y] = meshgrid(possible_x, possible_y);
-                all_points = [X(:), Y(:), 50*ones(length(X(:)), 1)];
-                
-                % 排除起点和终点
-                valid_points = [];
-                for i = 1:size(all_points, 1)
-                    pt = all_points(i, :);
-                    % 排除起点
-                    if abs(pt(1) - start_point(1)) < 0.1 && abs(pt(2) - start_point(2)) < 0.1
-                        continue;
-                    end
-                    % 排除终点
-                    if abs(pt(1) - end_point(1)) < 0.1 && abs(pt(2) - end_point(2)) < 0.1
-                        continue;
-                    end
-                    valid_points = [valid_points; pt];
-                end
-                
-                % 使用最近邻算法对所有中间点进行排序，确保路径不交叉且无重复
-                % 包含所有可能的中间点（不再限制数量）
-                num_intermediate = size(valid_points, 1);
-                selected_points = zeros(num_intermediate, 3);
-                used_indices = false(size(valid_points, 1), 1);
-                
-                % 从起点开始
-                current_point = start_point;
-                
-                for i = 1:num_intermediate
-                    % 找到未使用且距离当前点最近的点
-                    distances = inf(size(valid_points, 1), 1);
-                    for j = 1:size(valid_points, 1)
-                        if ~used_indices(j)
-                            distances(j) = norm(valid_points(j, 1:2) - current_point(1:2));
-                        end
-                    end
-                    
-                    [~, nearest_idx] = min(distances);
-                    selected_points(i, :) = valid_points(nearest_idx, :);
-                    used_indices(nearest_idx) = true;
-                    current_point = selected_points(i, :);
-                end
-                
-                % 检查并确保路径不交叉
-                path_points = [start_point; selected_points; end_point];
-                path_points = obj.ensureNoCrossing(path_points);
-                
-                presetPath = path_points;
+            if method == 0  % 0 = 固定预设路径
+                % 固定的预设路径点（按顺序）
+                presetPath = [
+                    40,   40,  40;   % 起点
+                    80,  40,  40
+                ];
+                % presetPath = [
+                %     40,   40,  40;   % 起点
+                %     168,  40,  40;   % 转折点1
+                %     168,  125, 40;   % 转折点2
+                %     83,   125, 40;   % 转折点3
+                %     83,   208, 40;   % 转折点4
+                %     250,  208, 40    % 终点
+                % ];
             else
-                error('未知的预设路径生成方法: %s', method);
+                error('未知的预设路径生成方法: %d', method);
             end
         end
         
@@ -565,63 +768,334 @@ classdef UAVPathPlanning < PROBLEM
         
         %% 生成障碍物
         function obstacles = generateObstacles(obj, method)
-            % 根据方法名称生成障碍物
-            % obstacles: N_obstacle x 5，每行：[x_min, y_min, x_max, y_max, height]
+            % 生成障碍物（基于αβγ的方法）
+            % obstacles: gridX x gridY x 5 三维数组
+            % obstacles(x, y, :) = [x_min, y_min, x_max, y_max, height]
+            % x相同的建筑物在同一行，y相同的建筑物在同一列
             
-            if strcmpi(method, 'default')
-                % 默认方法：网格布局
-                % 1<=x<=5，1<=y<=5
-                % 在横坐标20(x-0.5)~20x，纵坐标20(y-0.5)~20y处
-                % 都有地面为正方形的高度在30~60间随机变化的长方体建筑物障碍物
-                % 
-                % 例如：
-                % x=1: 横坐标 20(1-0.5)~20*1 = 10~20
-                % x=2: 横坐标 20(2-0.5)~20*2 = 30~40
-                % x=3: 横坐标 20(3-0.5)~20*3 = 50~60
-                % x=4: 横坐标 20(4-0.5)~20*4 = 70~80
-                % x=5: 横坐标 20(5-0.5)~20*5 = 90~100
-                % 
-                % 这意味着20~30, 40~50, 60~70, 80~90之间没有建筑物
-                obstacles = [];
-                for x = 1:5
-                    for y = 1:5
-                        x_min = 20 * (x - 0.5);
-                        y_min = 20 * (y - 0.5);
-                        x_max = 20 * x;
-                        y_max = 20 * y;
-                        height = 30 + (60 - 30) * rand();  % 高度在30~60米之间随机
-                        obstacles = [obstacles; x_min, y_min, x_max, y_max, height];
+            if method == 0
+                % 新方法：基于城市密度比α、建筑密度β和瑞利分布参数γ
+                % 使用obj.alpha, obj.beta, obj.gamma参数
+                
+                % 获取地图边界（默认0-1000米）
+                map_x_min = 0;
+                map_x_max = 500;
+                map_y_min = 0;
+                map_y_max = 500;
+                
+                % 计算地图面积（平方公里）
+                map_width = map_x_max - map_x_min;   % 米
+                map_height = map_y_max - map_y_min;   % 米
+                map_area_m2 = map_width * map_height;  % 平方米
+                map_area_km2 = map_area_m2 / 1e6;     % 平方公里
+                
+                % 计算建筑物几何特征
+                % 建筑物宽度：W = 1000 * (α / β)^0.5
+                W = 1000 * sqrt(obj.alpha / obj.beta);  % 米
+                
+                % 街道间距：S = 1000 / β^0.5 - W
+                S = 1000 / sqrt(obj.beta) - W;  % 米
+                
+                % 总建筑数量：N = β * Area
+                N = round(obj.beta * map_area_km2);  % 栋
+                
+                % 计算网格大小（建筑物间距 = W + S）
+                buildingSpacing = W + S;  % 米
+                
+                % 计算网格尺寸（确保覆盖整个地图）
+                gridX = ceil(map_width / buildingSpacing);
+                gridY = ceil(map_height / buildingSpacing);
+                
+                % 初始化障碍物数组
+                obstacles = zeros(gridX, gridY, 5);
+                
+                % 生成建筑物
+                buildingCount = 0;
+                for x = 1:gridX
+                    for y = 1:gridY
+                        % 计算建筑物中心位置
+                        center_x = map_x_min + (x - 0.5) * buildingSpacing;
+                        center_y = map_y_min + (y - 0.5) * buildingSpacing;
+                        
+                        % 检查是否在地图范围内
+                        if center_x >= map_x_min && center_x <= map_x_max && ...
+                           center_y >= map_y_min && center_y <= map_y_max
+                            
+                            % 计算建筑物边界（正方形，边长为W）
+                            x_min = center_x - W / 2;
+                            y_min = center_y - W / 2;
+                            x_max = center_x + W / 2;
+                            y_max = center_y + W / 2;
+                            
+                            % 确保建筑物在地图范围内
+                            x_min = max(x_min, map_x_min);
+                            y_min = max(y_min, map_y_min);
+                            x_max = min(x_max, map_x_max);
+                            y_max = min(y_max, map_y_max);
+                            
+                            % 建筑高度：h ~ Rayleigh(γ)
+                            % 瑞利分布：h = gamma * sqrt(-2 * log(1 - U))，其中U是[0,1)的均匀随机数
+                            U = rand();
+                            height = obj.gamma * sqrt(-2 * log(1 - U));
+                            
+                            % 确保高度为正且合理（至少1米，最多200米）
+                            height = max(1, min(200, height));
+                            
+                            obstacles(x, y, :) = [x_min, y_min, x_max, y_max, height];
+                            buildingCount = buildingCount + 1;
+                            
+                            % 如果已达到目标建筑数量，停止生成
+                            if buildingCount >= N
+                                break;
+                            end
+                        end
+                    end
+                    if buildingCount >= N
+                        break;
                     end
                 end
+                
+                % 如果生成的建筑物数量少于N，调整网格大小
+                if buildingCount < N
+                    % 增加网格密度
+                    gridX = ceil(sqrt(N * map_width / map_height));
+                    gridY = ceil(sqrt(N * map_height / map_width));
+                    obstacles = zeros(gridX, gridY, 5);
+                    
+                    buildingCount = 0;
+                    for x = 1:gridX
+                        for y = 1:gridY
+                            center_x = map_x_min + (x - 0.5) * (map_width / gridX);
+                            center_y = map_y_min + (y - 0.5) * (map_height / gridY);
+                            
+                            if center_x >= map_x_min && center_x <= map_x_max && ...
+                               center_y >= map_y_min && center_y <= map_y_max
+                                
+                                x_min = center_x - W / 2;
+                                y_min = center_y - W / 2;
+                                x_max = center_x + W / 2;
+                                y_max = center_y + W / 2;
+                                
+                                x_min = max(x_min, map_x_min);
+                                y_min = max(y_min, map_y_min);
+                                x_max = min(x_max, map_x_max);
+                                y_max = min(y_max, map_y_max);
+                                
+                                U = rand();
+                                height = obj.gamma * sqrt(-2 * log(1 - U));
+                                height = max(1, min(200, height));
+                                
+                                obstacles(x, y, :) = [x_min, y_min, x_max, y_max, height];
+                                buildingCount = buildingCount + 1;
+                                
+                                if buildingCount >= N
+                                    break;
+                                end
+                            end
+                        end
+                        if buildingCount >= N
+                            break;
+                        end
+                    end
+                end
+                
+                % 保存网格大小
+                obj.obstacleGridSize = [gridX, gridY];
+                
+                fprintf('建筑物生成完成：\n');
+                fprintf('  参数：α=%.2f, β=%.0f 栋/km², γ=%.0f m\n', obj.alpha, obj.beta, obj.gamma);
+                fprintf('  建筑物宽度 W=%.2f m，街道间距 S=%.2f m\n', W, S);
+                fprintf('  地图面积=%.4f km²，目标建筑数量=%d 栋，实际生成=%d 栋\n', ...
+                    map_area_km2, N, buildingCount);
+                fprintf('  网格大小：%d x %d\n', gridX, gridY);
             else
-                % 其他方法可以在这里扩展
-                error('未知的障碍物生成方法: %s', method);
+                error('未知的障碍物生成方法: %d（只支持method=0）', method);
             end
         end
         
-        %% 在建筑物顶端生成基站
-        function baseStations = generateBaseStationsOnObstacles(obj, numBS, obstacles)
-            % 在每个建筑物顶端生成基站
-            % 每个基站位于一个建筑物的中心位置，高度为建筑物高度+5米
-            % 注意：基站数量等于建筑物数量，numBS参数将被忽略
+        %% 基于每平方公里基站数量的均匀部署算法
+        function baseStations = generateBaseStationsUniform(obj, bsPerKm2, obstacles)
+            %generateBaseStationsUniform - 基于每平方公里基站数量均匀部署基站
+            %
+            %   算法策略：
+            %   1. 计算地图总面积（根据障碍物边界或默认边界）
+            %   2. 根据每平方公里基站数量计算需要的建筑物数量（注意：每个建筑物部署2个基站）
+            %   3. 使用K-means聚类确定基站的目标位置（确保均匀分布）
+            %   4. 在每个目标位置附近选择最高的建筑物
+            %   5. 在选中的建筑物顶部部署基站：每个建筑物部署2个基站
+            %      - 基站1：建筑物左下角（x_min, y_min）
+            %      - 基站2：建筑物右上角（x_max, y_max）
+            %
+            %   输入：
+            %       bsPerKm2 - 每平方公里的基站数量
+            %       obstacles - 障碍物信息（gridX x gridY x 5 三维数组）
+            %
+            %   输出：
+            %       baseStations - 基站位置矩阵（numBS x 3，每行是[x, y, z]）
             
-            numObstacles = size(obstacles, 1);
-            baseStations = zeros(numObstacles, 3);
+            [gridX, gridY, ~] = size(obstacles);
             
-            for i = 1:numObstacles
-                obs = obstacles(i, :);
-                
-                % 计算建筑物中心位置
-                x_center = (obs(1) + obs(3)) / 2;
-                y_center = (obs(2) + obs(4)) / 2;
-                z_height = obs(5) + 5;  % 建筑物高度 + 5米
-                
-                % 在建筑物顶端添加小随机偏移（模拟基站安装位置）
-                x_offset = (obs(3) - obs(1)) * 0.2 * (rand() - 0.5);  % ±20%的偏移
-                y_offset = (obs(4) - obs(2)) * 0.2 * (rand() - 0.5);
-                
-                baseStations(i, :) = [x_center + x_offset, y_center + y_offset, z_height];
+            % 步骤1：计算地图总面积
+            % 从障碍物中获取地图边界
+            x_min_map = inf;
+            x_max_map = -inf;
+            y_min_map = inf;
+            y_max_map = -inf;
+            
+            for x = 1:gridX
+                for y = 1:gridY
+                    obs = obstacles(x, y, :);
+                    obs = obs(:)';
+                    if obs(5) > 0  % 只考虑有高度的建筑物
+                        x_min_map = min(x_min_map, obs(1));
+                        x_max_map = max(x_max_map, obs(3));
+                        y_min_map = min(y_min_map, obs(2));
+                        y_max_map = max(y_max_map, obs(4));
+                    end
+                end
             end
+            
+            % 如果无法从障碍物获取边界，使用默认边界（0-1000米）
+            if isinf(x_min_map)
+                x_min_map = 0;
+                x_max_map = 1000;
+                y_min_map = 0;
+                y_max_map = 1000;
+            end
+            
+            % 计算地图面积（平方米）
+            map_width = x_max_map - x_min_map;   % 米
+            map_height = y_max_map - y_min_map;   % 米
+            map_area_m2 = map_width * map_height;  % 平方米
+            map_area_km2 = map_area_m2 / 1e6;     % 平方公里
+            
+            % 步骤2：计算需要的建筑物数量
+            % 注意：每个建筑物部署2个基站（对角位置），所以需要的建筑物数量 = 基站总数 / 2
+            totalBS = max(1, round(bsPerKm2 * map_area_km2));
+            numBS = max(1, ceil(totalBS / 2));  % 需要的建筑物数量（向上取整）
+            
+            % 步骤3：收集所有建筑物的信息（位置和高度）
+            buildingList = [];
+            for x = 1:gridX
+                for y = 1:gridY
+                    obs = obstacles(x, y, :);
+                    obs = obs(:)';
+                    if obs(5) > 0  % 只考虑有高度的建筑物
+                        x_center = (obs(1) + obs(3)) / 2;
+                        y_center = (obs(2) + obs(4)) / 2;
+                        height = obs(5);
+                        buildingList = [buildingList; x_center, y_center, height, x, y];
+                    end
+                end
+            end
+            
+            if isempty(buildingList)
+                % 如果没有建筑物，返回空矩阵
+                baseStations = zeros(0, 3);
+                obj.numBS = 0;
+                return;
+            end
+            
+            % 如果需要的基站数量大于等于建筑物数量，使用所有建筑物
+            if numBS >= size(buildingList, 1)
+                numBS = size(buildingList, 1);
+                selectedBuildings = buildingList;
+            else
+                % 步骤4：使用K-means聚类确定基站的目标位置（确保均匀分布）
+                % 在2D平面上进行K-means聚类（只使用x, y坐标）
+                buildingPositions = buildingList(:, 1:2);
+                
+                % 尝试使用K-means聚类，如果失败则使用网格方法
+                try
+                    [~, clusterCenters] = kmeans(buildingPositions, numBS, 'Replicates', 10, 'MaxIter', 100);
+                    useKMeans = true;
+                catch
+                    % 如果K-means不可用，使用网格方法作为备选
+                    % 将地图划分为numBS个网格，在每个网格中选择最高的建筑物
+                    gridSize = ceil(sqrt(numBS));
+                    x_step = map_width / gridSize;
+                    y_step = map_height / gridSize;
+                    clusterCenters = zeros(numBS, 2);
+                    idx = 1;
+                    for gx = 1:gridSize
+                        for gy = 1:gridSize
+                            if idx <= numBS
+                                clusterCenters(idx, :) = [x_min_map + (gx-0.5)*x_step, y_min_map + (gy-0.5)*y_step];
+                                idx = idx + 1;
+                            end
+                        end
+                    end
+                    useKMeans = false;
+                end
+                
+                % 步骤5：为每个聚类中心选择最近的最高建筑物
+                selectedBuildings = zeros(numBS, 5);
+                usedBuildings = false(size(buildingList, 1), 1);
+                
+                for i = 1:numBS
+                    center = clusterCenters(i, :);
+                    
+                    % 计算所有未使用建筑物到聚类中心的距离
+                    distances = inf(size(buildingList, 1), 1);
+                    for j = 1:size(buildingList, 1)
+                        if ~usedBuildings(j)
+                            distances(j) = norm(buildingList(j, 1:2) - center);
+                        end
+                    end
+                    
+                    % 在距离聚类中心一定范围内的建筑物中，选择最高的
+                    % 搜索半径设为平均建筑物间距的1.5倍
+                    avgDistance = sqrt(map_area_m2 / size(buildingList, 1));
+                    searchRadius = avgDistance * 1.5;
+                    
+                    candidates = find(distances <= searchRadius & ~usedBuildings);
+                    
+                    if isempty(candidates)
+                        % 如果没有候选建筑物，选择最近的
+                        [~, bestIdx] = min(distances);
+                        candidates = bestIdx;
+                    end
+                    
+                    % 在候选建筑物中选择最高的
+                    [~, maxHeightIdx] = max(buildingList(candidates, 3));
+                    bestIdx = candidates(maxHeightIdx);
+                    
+                    selectedBuildings(i, :) = buildingList(bestIdx, :);
+                    usedBuildings(bestIdx) = true;
+                end
+            end
+            
+            % 步骤6：在选中的建筑物顶部部署基站
+            % 每个建筑物部署2个基站：一个在(x_min, y_min)，另一个在(x_max, y_max)
+            numSelectedBuildings = size(selectedBuildings, 1);
+            baseStations = zeros(numSelectedBuildings * 2, 3);
+            
+            bsIdx = 1;
+            for i = 1:numSelectedBuildings
+                gridX_idx = selectedBuildings(i, 4);
+                gridY_idx = selectedBuildings(i, 5);
+                
+                % 获取建筑物的详细信息
+                obs = obstacles(gridX_idx, gridY_idx, :);
+                obs = obs(:)';
+                
+                x_min = obs(1);
+                y_min = obs(2);
+                x_max = obs(3);
+                y_max = obs(4);
+                height = obs(5);
+                
+                % 基站1：建筑物左下角（x_min, y_min），高度为建筑物高度+5米
+                baseStations(bsIdx, :) = [x_min, y_min, height + 5];
+                bsIdx = bsIdx + 1;
+                
+                % 基站2：建筑物右上角（x_max, y_max），高度为建筑物高度+5米
+                baseStations(bsIdx, :) = [x_max, y_max, height + 5];
+                bsIdx = bsIdx + 1;
+            end
+            
+            % 更新基站数量（每个建筑物2个基站）
+            obj.numBS = size(baseStations, 1);
         end
         
         %% 获取两点之间的障碍物
@@ -639,25 +1113,322 @@ classdef UAVPathPlanning < PROBLEM
             
             relevantObstacles = [];
             
-            % 遍历所有障碍物，筛选出与线段相交的
-            for i = 1:size(obj.obstacles, 1)
-                obs = obj.obstacles(i, :);
+            % 使用二维数组结构进行快速查询
+            gridX = obj.obstacleGridSize(1);
+            gridY = obj.obstacleGridSize(2);
+            
+            % 根据线段bounding box确定需要检查的网格范围
+            % 对于默认方法：x坐标范围是20*(x-0.5)到20*x
+            % 计算哪些网格单元可能与线段相交
+            x_start = max(1, floor((seg_x_min - 10) / 20) + 1);
+            x_end = min(gridX, ceil(seg_x_max / 20));
+            y_start = max(1, floor((seg_y_min - 10) / 20) + 1);
+            y_end = min(gridY, ceil(seg_y_max / 20));
+            
+            % 只遍历可能相交的网格单元
+            for x = x_start:x_end
+                for y = y_start:y_end
+                    obs = obj.obstacles(x, y, :);
+                    obs = obs(:)';  % 转换为行向量
+                    
+                    x_min = obs(1);
+                    y_min = obs(2);
+                    x_max = obs(3);
+                    y_max = obs(4);
+                    
+                    % 快速排除：如果线段的bounding box与障碍物的bounding box不相交，跳过
+                    if seg_x_max < x_min || seg_x_min > x_max || ...
+                       seg_y_max < y_min || seg_y_min > y_max
+                        continue;
+                    end
+                    
+                    % 检查线段是否与障碍物的水平投影相交
+                    if obj.segmentIntersectsRectangleFast(point1(1:2), point2(1:2), ...
+                                                          [x_min, y_min], [x_max, y_max])
+                        % 如果相交，添加到相关障碍物列表
+                        relevantObstacles = [relevantObstacles; obs];
+                    end
+                end
+            end
+        end
+        
+        %% 检查航点是否在建筑物中
+        function violation = checkWaypointInObstacle(obj, waypoint)
+            %checkWaypointInObstacle - 检查航点是否在建筑物中
+            %
+            %   输入：
+            %       waypoint - 1x3向量 [x, y, z]
+            %   输出：
+            %       violation - 约束违反度
+            %                  如果航点在建筑物外，violation = 0（满足约束）
+            %                  如果航点在建筑物内，violation > 0（违反约束，值为到建筑物表面的最小距离）
+            
+            violation = 0;
+            
+            % 使用二维数组结构进行快速查询
+            gridX = obj.obstacleGridSize(1);
+            gridY = obj.obstacleGridSize(2);
+            
+            % 根据航点坐标确定需要检查的网格范围
+            wp_x = waypoint(1);
+            wp_y = waypoint(2);
+            wp_z = waypoint(3);
+            
+            % 计算航点所在的网格单元
+            x_idx = max(1, min(gridX, floor((wp_x - 10) / 20) + 1));
+            y_idx = max(1, min(gridY, floor((wp_y - 10) / 20) + 1));
+            
+            % 检查航点所在的网格单元及其相邻单元（以防航点在边界附近）
+            x_range = max(1, x_idx-1):min(gridX, x_idx+1);
+            y_range = max(1, y_idx-1):min(gridY, y_idx+1);
+            
+            for x = x_range
+                for y = y_range
+                    obs = obj.obstacles(x, y, :);
+                    obs = obs(:)';  % 转换为行向量
+                    
+                    x_min = obs(1);
+                    y_min = obs(2);
+                    x_max = obs(3);
+                    y_max = obs(4);
+                    height = obs(5);
+                    
+                    % 检查航点是否在建筑物的水平投影内
+                    if wp_x >= x_min && wp_x <= x_max && ...
+                       wp_y >= y_min && wp_y <= y_max
+                        % 检查航点的高度是否在建筑物高度范围内
+                        if wp_z >= 0 && wp_z <= height
+                            % 航点在建筑物内，计算到建筑物表面的最小距离
+                            % 到各个面的距离
+                            dist_to_xmin = wp_x - x_min;
+                            dist_to_xmax = x_max - wp_x;
+                            dist_to_ymin = wp_y - y_min;
+                            dist_to_ymax = y_max - wp_y;
+                            dist_to_bottom = wp_z;
+                            dist_to_top = height - wp_z;
+                            
+                            % 最小距离（到最近表面的距离）
+                            minDistToSurface = min([dist_to_xmin, dist_to_xmax, ...
+                                                   dist_to_ymin, dist_to_ymax, ...
+                                                   dist_to_bottom, dist_to_top]);
+                            
+                            % 约束违反度 = 到表面的距离（越小表示越深入建筑物）
+                            % 使用一个小的惩罚值，确保违反度 > 0
+                            violation = max(violation, 1.0 - minDistToSurface);
+                        end
+                    end
+                end
+            end
+        end
+        
+        %% 修复航点位置，将其移出建筑物
+        function repairedWaypoint = repairWaypointOutsideObstacle(obj, waypoint)
+            %repairWaypointOutsideObstacle - 修复航点位置，将其移出建筑物
+            %
+            %   修复策略：
+            %   1. 检查航点是否在建筑物内
+            %   2. 如果在建筑物内，计算到各个面的距离
+            %   3. 选择距离最近的表面，将航点移动到该表面外（加上小的偏移量）
+            %   4. 优先向上移动（因为无人机通常在空中飞行）
+            %
+            %   输入：
+            %       waypoint - 1x3向量 [x, y, z]
+            %   输出：
+            %       repairedWaypoint - 修复后的航点坐标（1x3向量）
+            
+            repairedWaypoint = waypoint;
+            
+            % 使用二维数组结构进行快速查询
+            gridX = obj.obstacleGridSize(1);
+            gridY = obj.obstacleGridSize(2);
+            
+            % 根据航点坐标确定需要检查的网格范围
+            wp_x = waypoint(1);
+            wp_y = waypoint(2);
+            wp_z = waypoint(3);
+            
+            % 计算航点所在的网格单元
+            x_idx = max(1, min(gridX, floor((wp_x - 10) / 20) + 1));
+            y_idx = max(1, min(gridY, floor((wp_y - 10) / 20) + 1));
+            
+            % 检查航点所在的网格单元及其相邻单元（以防航点在边界附近）
+            x_range = max(1, x_idx-1):min(gridX, x_idx+1);
+            y_range = max(1, y_idx-1):min(gridY, y_idx+1);
+            
+            % 找到包含航点的建筑物
+            containingObstacle = [];
+            for x = x_range
+                for y = y_range
+                    obs = obj.obstacles(x, y, :);
+                    obs = obs(:)';  % 转换为行向量
+                    
+                    x_min = obs(1);
+                    y_min = obs(2);
+                    x_max = obs(3);
+                    y_max = obs(4);
+                    height = obs(5);
+                    
+                    % 检查航点是否在建筑物的水平投影内
+                    if wp_x >= x_min && wp_x <= x_max && ...
+                       wp_y >= y_min && wp_y <= y_max
+                        % 检查航点的高度是否在建筑物高度范围内
+                        if wp_z >= 0 && wp_z <= height
+                            % 航点在建筑物内，记录这个建筑物
+                            containingObstacle = obs;
+                            break;
+                        end
+                    end
+                end
+                if ~isempty(containingObstacle)
+                    break;
+                end
+            end
+            
+            % 如果航点在建筑物内，需要修复
+            if ~isempty(containingObstacle)
+                x_min = containingObstacle(1);
+                y_min = containingObstacle(2);
+                x_max = containingObstacle(3);
+                y_max = containingObstacle(4);
+                height = containingObstacle(5);
+                
+                % 计算到各个面的距离
+                dist_to_xmin = wp_x - x_min;
+                dist_to_xmax = x_max - wp_x;
+                dist_to_ymin = wp_y - y_min;
+                dist_to_ymax = y_max - wp_y;
+                dist_to_bottom = wp_z;
+                dist_to_top = height - wp_z;
+                
+                % 找到最近的表面（优先考虑向上移动）
+                distances = [dist_to_xmin, dist_to_xmax, dist_to_ymin, dist_to_ymax, dist_to_bottom, dist_to_top];
+                
+                % 优先向上移动（索引6对应top）
+                % 策略：优先向上移动，因为无人机通常在空中飞行
+                if dist_to_top == min(distances) || dist_to_top <= min([dist_to_xmin, dist_to_xmax, dist_to_ymin, dist_to_ymax, dist_to_bottom])
+                    % 向上移动到建筑物顶部上方（加上1米安全距离）
+                    repairedWaypoint(3) = height + 1;
+                elseif dist_to_xmin == min(distances)
+                    % 向左移动（加上1米安全距离）
+                    repairedWaypoint(1) = x_min - 1;
+                elseif dist_to_xmax == min(distances)
+                    % 向右移动（加上1米安全距离）
+                    repairedWaypoint(1) = x_max + 1;
+                elseif dist_to_ymin == min(distances)
+                    % 向前移动（加上1米安全距离）
+                    repairedWaypoint(2) = y_min - 1;
+                elseif dist_to_ymax == min(distances)
+                    % 向后移动（加上1米安全距离）
+                    repairedWaypoint(2) = y_max + 1;
+                else
+                    % 默认向上移动
+                    repairedWaypoint(3) = height + 5;
+                end
+            end
+        end
+        
+        %% 检查连线是否穿过建筑物
+        function violation = checkSegmentIntersectsObstacle(obj, point1, point2)
+            %checkSegmentIntersectsObstacle - 检查连线是否穿过建筑物
+            %
+            %   输入：
+            %       point1, point2 - 1x3向量 [x, y, z]
+            %   输出：
+            %       violation - 约束违反度
+            %                  如果连线不穿过建筑物，violation = 0（满足约束）
+            %                  如果连线穿过建筑物，violation > 0（违反约束）
+            
+            violation = 0;
+            
+            % 先筛选出与线段相交的障碍物
+            relevantObstacles = obj.getObstaclesBetweenPoints(point1, point2);
+            
+            % 如果没有相关障碍物，直接返回0（满足约束）
+            if isempty(relevantObstacles)
+                return;
+            end
+            
+            % 检查线段是否与任何障碍物相交
+            for i = 1:size(relevantObstacles, 1)
+                obs = relevantObstacles(i, :);
                 x_min = obs(1);
                 y_min = obs(2);
                 x_max = obs(3);
                 y_max = obs(4);
-                
-                % 快速排除：如果线段的bounding box与障碍物的bounding box不相交，跳过
-                if seg_x_max < x_min || seg_x_min > x_max || ...
-                   seg_y_max < y_min || seg_y_min > y_max
-                    continue;
-                end
+                height = obs(5);
                 
                 % 检查线段是否与障碍物的水平投影相交
                 if obj.segmentIntersectsRectangleFast(point1(1:2), point2(1:2), ...
                                                       [x_min, y_min], [x_max, y_max])
-                    % 如果相交，添加到相关障碍物列表
-                    relevantObstacles = [relevantObstacles; obs];
+                    % 如果水平投影相交，检查高度是否被阻挡
+                    % 使用与checkLineOfSight相同的逻辑
+                    t_in_rect = [];
+                    
+                    % 检查起点和终点是否在矩形内
+                    if point1(1) >= x_min && point1(1) <= x_max && ...
+                       point1(2) >= y_min && point1(2) <= y_max
+                        t_in_rect = [t_in_rect, 0];
+                    end
+                    if point2(1) >= x_min && point2(1) <= x_max && ...
+                       point2(2) >= y_min && point2(2) <= y_max
+                        t_in_rect = [t_in_rect, 1];
+                    end
+                    
+                    % 检查与四条边的交点
+                    if abs(point2(1) - point1(1)) > 1e-10
+                        % 左边界
+                        t = (x_min - point1(1)) / (point2(1) - point1(1));
+                        if t > 0 && t < 1
+                            y_at_t = point1(2) + t * (point2(2) - point1(2));
+                            if y_at_t >= y_min && y_at_t <= y_max
+                                t_in_rect = [t_in_rect, t];
+                            end
+                        end
+                        % 右边界
+                        t = (x_max - point1(1)) / (point2(1) - point1(1));
+                        if t > 0 && t < 1
+                            y_at_t = point1(2) + t * (point2(2) - point1(2));
+                            if y_at_t >= y_min && y_at_t <= y_max
+                                t_in_rect = [t_in_rect, t];
+                            end
+                        end
+                    end
+                    
+                    if abs(point2(2) - point1(2)) > 1e-10
+                        % 下边界
+                        t = (y_min - point1(2)) / (point2(2) - point1(2));
+                        if t > 0 && t < 1
+                            x_at_t = point1(1) + t * (point2(1) - point1(1));
+                            if x_at_t >= x_min && x_at_t <= x_max
+                                t_in_rect = [t_in_rect, t];
+                            end
+                        end
+                        % 上边界
+                        t = (y_max - point1(2)) / (point2(2) - point1(2));
+                        if t > 0 && t < 1
+                            x_at_t = point1(1) + t * (point2(1) - point1(1));
+                            if x_at_t >= x_min && x_at_t <= x_max
+                                t_in_rect = [t_in_rect, t];
+                            end
+                        end
+                    end
+                    
+                    % 计算线段在障碍物区域内的最低高度
+                    if ~isempty(t_in_rect)
+                        t_min = max(0, min(t_in_rect));
+                        t_max = min(1, max(t_in_rect));
+                        
+                        z_at_tmin = point1(3) + t_min * (point2(3) - point1(3));
+                        z_at_tmax = point1(3) + t_max * (point2(3) - point1(3));
+                        min_z_in_obstacle = min(z_at_tmin, z_at_tmax);
+                        
+                        % 如果最低高度低于障碍物高度，则穿过建筑物
+                        if min_z_in_obstacle < height
+                            % 计算违反度：线段在建筑物内的最大深度
+                            penetration_depth = height - min_z_in_obstacle;
+                            violation = max(violation, penetration_depth);
+                        end
+                    end
                 end
             end
         end

@@ -1,6 +1,12 @@
-function Population = EnvironmentalSelection(Population,V,theta)
+function Population = EnvironmentalSelection(Population,V,theta,forceFeasible)
     % The environmental selection of LMOCSO
-    
+    %
+    %   输入参数：
+    %       Population - 种群
+    %       V - 参考向量
+    %       theta - APD参数
+    %       forceFeasible - 可选，是否强制只选择可行解（默认false）
+    %
     %------------------------------- Copyright --------------------------------
     % Copyright (c) 2022 BIMK Group. You are free to use the PlatEMO for
     % research purposes. All publications which use this platform or any code
@@ -9,6 +15,11 @@ function Population = EnvironmentalSelection(Population,V,theta)
     % for evolutionary multi-objective optimization [educational forum], IEEE
     % Computational Intelligence Magazine, 2017, 12(4): 73-87".
     %--------------------------------------------------------------------------
+    
+        % 默认不强制只选择可行解（保持向后兼容）
+        if nargin < 4
+            forceFeasible = false;
+        end
     
         PopObj = Population.objs;
 
@@ -46,11 +57,13 @@ function Population = EnvironmentalSelection(Population,V,theta)
                 % Select the one with the minimum APD value
                 [~,best] = min(APD);
                 Next(i)  = current1(best);
-            elseif ~isempty(current2)
+            elseif ~isempty(current2) && ~forceFeasible
+                % 只有在不强制可行解的情况下，才选择不可行解
                 % Select the one with the minimum CV value
                 [~,best] = min(CV(current2));
                 Next(i)  = current2(best);
             end
+            % 如果forceFeasible=true且current1为空，则Next(i)保持为0，该参考向量不会被选择
         end
         % Population for next generation
         Population = Population(Next(Next~=0));

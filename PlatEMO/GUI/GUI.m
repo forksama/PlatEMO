@@ -120,9 +120,12 @@ classdef GUI < handle
                 Files = what(Folders{i});
                 Files = Files.m;
                 for j = 1 : length(Files)
+                    fprintf('正在检查文件: %s\n', Files{j});
                     f = fopen(Files{j});
                     fgetl(f);
-                    str = regexprep(fgetl(f),'^\s*%\s*','','once');
+                    line2 = fgetl(f);
+                    fprintf('  第二行内容: %s (类型: %s)\n', mat2str(line2), class(line2));
+                    str = regexprep(line2,'^\s*%\s*','','once');
                     fclose(f);
                     labelstr = regexp(str,'(?<=<).*?(?=>)','match');
                     if ~isempty(labelstr)

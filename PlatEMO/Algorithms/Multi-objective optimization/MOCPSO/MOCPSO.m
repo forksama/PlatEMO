@@ -25,12 +25,12 @@ methods
         % 1. 目前算法中在适应度以及环境筛选中，都进行了归一化，对多目标没有进行权重设置
 
         
-        % 算法中的适应度计算负责 “前期分组”，判断粒子的 “相对优秀程度”
-        % 评估的是 “粒子在当前种群中的相对位置”
+        % 算法中的适应度计算负责 "前期分组"，判断粒子的 "相对优秀程度"
+        % 评估的是 "粒子在当前种群中的相对位置"
         % 根据适应度为粒子划分DSS（探险）或 CSS（追优）策略
 
-        % 算法中的环境筛选负责 “后期选优”，判断粒子的 “绝对优秀程度”
-        % 评估的是 “粒子的绝对质量”
+        % 算法中的环境筛选负责 "后期选优"，判断粒子的 "绝对优秀程度"
+        % 评估的是 "粒子的绝对质量"
         % APD 越小，粒子越靠近理想点（收敛性好）且越匹配参考向量（多样性好）
 
         % 关于Population.decs，这个是决策变量，表示粒子的位置
@@ -41,18 +41,49 @@ methods
 
 
         %% Generate random population
-        [V,Problem.N] = UniformPoint(Problem.N,Problem.M);
+        % 生成三倍于N的参考向量
+        [V,~] = UniformPoint(10*Problem.N,Problem.M);
         Population = Problem.Initialization();
         Population = EnvironmentalSelection(Population,V,(Problem.FE/Problem.maxFE)^2);
+        
+        % 打印初始种群的可行解和不可行解数量
+        CV = sum(max(0,Population.cons),2);
+        numFeasible = sum(CV == 0);
+        numInfeasible = sum(CV > 0);
+        fprintf('初始种群: 可行解=%d, 不可行解=%d, 总计=%d\n', numFeasible, numInfeasible, length(Population));
 
         % Optimization
+        iteration = 0;
         while Algorithm.NotTerminated(Population)
+            iteration = iteration + 1;
+            % 判断是否是最后一次迭代（FE即将达到或超过maxFE）
+            isLastIteration = (Problem.FE >= Problem.maxFE * 0.99) || (Problem.maxFE - Problem.FE < 10);
+            
             if size(Population,2) < 3
                 disp(size(Population));
                 [N,D]     = size(Population.decs);
                 PopVel  = Population.adds(zeros(N,D));
                 Offspring = Polynomial_mutation(Problem,Population.decs,PopVel,N/2,D);
-                Population = EnvironmentalSelection([Population, Offspring],V,(Problem.FE/Problem.maxFE)^2);
+                Population = EnvironmentalSelection([Population, Offspring],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
+                
+                % 打印选择的可行解和不可行解数量
+                CV = sum(max(0,Population.cons),2);
+                numFeasible = sum(CV == 0);
+                numInfeasible = sum(CV > 0);
+                fprintf('迭代 %d (FE=%d/%d): 可行解=%d, 不可行解=%d, 总计=%d\n', ...
+                    iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population));
+                
+                % 如果是最后一次迭代，在循环结束前进行最终过滤
+                if Problem.FE >= Problem.maxFE
+                    CV = sum(max(0,Population.cons),2);
+                    if any(CV > 0)
+                        Population = EnvironmentalSelection(Population,V,1,true);
+                        CV = sum(max(0,Population.cons),2);
+                        numFeasible = sum(CV == 0);
+                        numInfeasible = sum(CV > 0);
+                        fprintf('最终过滤后: 可行解=%d, 不可行解=%d, 总计=%d\n', numFeasible, numInfeasible, length(Population));
+                    end
+                end
                 continue;
             end
 
@@ -65,7 +96,26 @@ methods
             [Winner, Loser1] = swapWL(Winner,Loser1,FitValue);
             [Loser1, Loser2] = swapWL(Loser1,Loser2,FitValue);
             [Offspring1,Offspring2, Offspring3]      = Operator(Population(Loser1),Population(Loser2),Population(Winner));
-            Population     = EnvironmentalSelection([Population,Offspring1,Offspring2,Offspring3],V,(Problem.FE/Problem.maxFE)^2);
+            Population     = EnvironmentalSelection([Population,Offspring1,Offspring2,Offspring3],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
+            
+            % 打印选择的可行解和不可行解数量
+            CV = sum(max(0,Population.cons),2);
+            numFeasible = sum(CV == 0);
+            numInfeasible = sum(CV > 0);
+            fprintf('迭代 %d (FE=%d/%d): 可行解=%d, 不可行解=%d, 总计=%d\n', ...
+                iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population));
+            
+            % 如果是最后一次迭代，在循环结束前进行最终过滤
+            if Problem.FE >= Problem.maxFE
+                CV = sum(max(0,Population.cons),2);
+                if any(CV > 0)
+                    Population = EnvironmentalSelection(Population,V,1,true);
+                    CV = sum(max(0,Population.cons),2);
+                    numFeasible = sum(CV == 0);
+                    numInfeasible = sum(CV > 0);
+                    fprintf('最终过滤后: 可行解=%d, 不可行解=%d, 总计=%d\n', numFeasible, numInfeasible, length(Population));
+                end
+            end
         end
     end
 end
