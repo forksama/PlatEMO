@@ -42,9 +42,26 @@ methods
 
         %% Generate random population
         % 生成三倍于N的参考向量
-        [V,~] = UniformPoint(10*Problem.N,Problem.M);
+        [V,~] = UniformPoint(Problem.N,Problem.M);
         Population = Problem.Initialization();
         Population = EnvironmentalSelection(Population,V,(Problem.FE/Problem.maxFE)^2);
+        
+        % 如果环境选择后种群为空（所有解都不可行），重新初始化
+        maxRetries = 10;  % 最多重试10次
+        retryCount = 0;
+        while isempty(Population) && retryCount < maxRetries
+            warning('环境选择后种群为空（所有解都不可行），重新初始化种群（重试 %d/%d）', retryCount + 1, maxRetries);
+            Population = Problem.Initialization();
+            Population = EnvironmentalSelection(Population,V,(Problem.FE/Problem.maxFE)^2);
+            retryCount = retryCount + 1;
+        end
+        
+        % 如果仍然为空，使用所有解（包括不可行解）作为初始种群
+        if isempty(Population)
+            warning('重试后种群仍为空，使用所有解（包括不可行解）作为初始种群');
+            Population = Problem.Initialization();
+            % 不进行环境选择，直接使用所有初始解
+        end
         
         % 打印初始种群的可行解和不可行解数量
         CV = sum(max(0,Population.cons),2);
@@ -59,12 +76,34 @@ methods
             % 判断是否是最后一次迭代（FE即将达到或超过maxFE）
             isLastIteration = (Problem.FE >= Problem.maxFE * 0.99) || (Problem.maxFE - Problem.FE < 10);
             
-            if size(Population,2) < 3
-                disp(size(Population));
-                [N,D]     = size(Population.decs);
-                PopVel  = Population.adds(zeros(N,D));
-                Offspring = Polynomial_mutation(Problem,Population.decs,PopVel,N/2,D);
-                Population = EnvironmentalSelection([Population, Offspring],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
+            if size(Population,2) < 3 || isempty(Population)
+                % 如果种群为空或太小，重新初始化
+                if isempty(Population)
+                    warning('迭代 %d: 种群为空，重新初始化', iteration);
+                    Population = Problem.Initialization();
+                    Population = EnvironmentalSelection(Population,V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
+                    % 如果仍然为空，使用所有初始解
+                    if isempty(Population)
+                        Population = Problem.Initialization();
+                    end
+                end
+                
+                if ~isempty(Population)
+                    disp(size(Population));
+                    [N,D]     = size(Population.decs);
+                    PopVel  = Population.adds(zeros(N,D));
+                    Offspring = Polynomial_mutation(Problem,Population.decs,PopVel,N/2,D);
+                    Population = EnvironmentalSelection([Population, Offspring],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
+                    
+                    % 检查环境选择后是否为空
+                    if isempty(Population)
+                        warning('迭代 %d: 环境选择后种群为空，使用所有解（包括不可行解）', iteration);
+                        Population = [Population, Offspring];
+                    end
+                else
+                    warning('迭代 %d: 无法生成有效种群，跳过本次迭代', iteration);
+                    continue;
+                end
                 
                 % 打印选择的可行解和不可行解数量
                 CV = sum(max(0,Population.cons),2);
@@ -74,7 +113,7 @@ methods
                     iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population));
                 
                 % 如果是最后一次迭代，在循环结束前进行最终过滤
-                if Problem.FE >= Problem.maxFE
+                if true
                     CV = sum(max(0,Population.cons),2);
                     if any(CV > 0)
                         Population = EnvironmentalSelection(Population,V,1,true);
@@ -87,6 +126,17 @@ methods
                 continue;
             end
 
+            % 检查种群是否为空
+            if isempty(Population)
+                warning('迭代 %d: 种群为空，重新初始化', iteration);
+                Population = Problem.Initialization();
+                Population = EnvironmentalSelection(Population,V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
+                if isempty(Population)
+                    Population = Problem.Initialization();
+                end
+                continue;
+            end
+            
             FitValue = calFitness(Population.objs);
             Rank = randperm(length(Population),floor((length(Population))/3)*3);
             Loser1 = Rank(1:end/3);
@@ -98,6 +148,12 @@ methods
             [Offspring1,Offspring2, Offspring3]      = Operator(Population(Loser1),Population(Loser2),Population(Winner));
             Population     = EnvironmentalSelection([Population,Offspring1,Offspring2,Offspring3],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
             
+            % 检查环境选择后是否为空
+            if isempty(Population)
+                warning('迭代 %d: 环境选择后种群为空，使用所有解（包括不可行解）', iteration);
+                Population = [Population,Offspring1,Offspring2,Offspring3];
+            end
+            
             % 打印选择的可行解和不可行解数量
             CV = sum(max(0,Population.cons),2);
             numFeasible = sum(CV == 0);
@@ -106,7 +162,7 @@ methods
                 iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population));
             
             % 如果是最后一次迭代，在循环结束前进行最终过滤
-            if Problem.FE >= Problem.maxFE
+            if true
                 CV = sum(max(0,Population.cons),2);
                 if any(CV > 0)
                     Population = EnvironmentalSelection(Population,V,1,true);

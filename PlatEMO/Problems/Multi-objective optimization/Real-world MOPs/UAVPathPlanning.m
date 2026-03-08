@@ -855,7 +855,7 @@ classdef UAVPathPlanning < PROBLEM
                 % 固定的预设路径点（按顺序）
                 presetPath = [
                     40,   40,  40;   % 起点
-                    80,  40,  40
+                    240,  40,  40
                 ];
                 
                 % XY平面边界约束（xyBound）
