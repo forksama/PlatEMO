@@ -855,7 +855,8 @@ classdef UAVPathPlanning < PROBLEM
                 % 固定的预设路径点（按顺序）
                 presetPath = [
                     40,   40,  40;   % 起点
-                    240,  40,  40
+                    123,  40,  40;
+                    123,  150, 40
                 ];
                 
                 % XY平面边界约束（xyBound）
@@ -867,7 +868,8 @@ classdef UAVPathPlanning < PROBLEM
                 %     * 当kUpper为realmax时，满足x < cUpper
                 % 示例：对于路径段[40,40,40]到[80,40,40]，约束y>33且y<50
                 obj.xyBound = [
-                    0, 33, 0, 50  % 路径段1：[40,40,40]到[80,40,40]
+                    0, 33, 0, 50;  % 路径段1：[40,40,40]到[80,40,40]
+                    realmax, 117, realmax, 133   % 路径段2：[123,40,40]到[123,150,40]
                 ];
                 
                 % presetPath = [
