@@ -25,7 +25,7 @@ Algorithm = DCMOCPSO('parameter', {2, 1});
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 50, 'maxFE', 1000, 'parameter', {96, 10, 4, -85, 0});
+Problem = UAVPathPlanning('N', 50, 'maxFE', 3000, 'parameter', {96, 10, 4, -85, 0});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
@@ -329,6 +329,231 @@ if length(finalPopulation) >= 1
     view(45, 30);
     
     hold off;
+    
+    %% 为每个最优解单独创建图，显示虚线信号连接基站
+    fprintf('\n=== 为每个最优解创建单独路径图（含基站虚线连接） ===\n');
+    
+    % 准备路径数据
+    paths = {actualPath_obj1, actualPath_obj2};
+    pathNames = {'目标1最优（信号强度最大）', '目标2最优（切换次数最小）'};
+    pathColors = {'g', 'm'};
+    pathMarkers = {'s', 'd'};
+    pathIndices = [idx_obj1, idx_obj2];
+    
+    if numObjectives >= 3
+        paths{end+1} = actualPath_obj3;
+        pathNames{end+1} = '目标3最优（覆盖率最大）';
+        pathColors{end+1} = 'c';
+        pathMarkers{end+1} = 'p';
+        pathIndices(end+1) = idx_obj3;
+    end
+    
+    % 为每个最优解创建单独图
+    for pathIdx = 1:length(paths)
+        currentPath = paths{pathIdx};
+        currentName = pathNames{pathIdx};
+        currentColor = pathColors{pathIdx};
+        currentMarker = pathMarkers{pathIdx};
+        currentPopObj = PopObj(pathIndices(pathIdx), :);
+        
+        % 计算每个航点连接的基站
+        numWaypoints = size(currentPath, 1);
+        connectedBS = zeros(numWaypoints, 1);
+        previousBS = 0;
+        
+        fprintf('计算 %s 的基站连接...\n', currentName);
+        for wpIdx = 1:numWaypoints
+            waypoint = currentPath(wpIdx, :);
+            
+            % 计算信号强度
+            distances = sqrt(sum((baseStations - repmat(waypoint, size(baseStations, 1), 1)).^2, 2));
+            signalStrengths = zeros(size(baseStations, 1), 1);
+            
+            for bsIdx = 1:size(baseStations, 1)
+                hasLOS = Problem.checkLineOfSight(waypoint, baseStations(bsIdx, :));
+                distances(bsIdx) = max(distances(bsIdx), 0.1);
+                if hasLOS
+                    signalStrengths(bsIdx) = -20*log10(distances(bsIdx)) - 61.4;
+                else
+                    signalStrengths(bsIdx) = -40*log10(distances(bsIdx)) - 72;
+                end
+            end
+            
+            [maxSignal, currentBS] = max(signalStrengths);
+            
+            if wpIdx == 1
+                connectedBS(wpIdx) = currentBS;
+                previousBS = currentBS;
+            else
+                if maxSignal < Problem.getSwitchThreshold()
+                    connectedBS(wpIdx) = currentBS;
+                    previousBS = currentBS;
+                else
+                    connectedBS(wpIdx) = previousBS;
+                end
+            end
+        end
+        
+        % 重新计算切换次数
+        switchCount_current = 0;
+        previousBS_switch = connectedBS(1);
+        for wpIdx2 = 2:numWaypoints
+            if connectedBS(wpIdx2) ~= previousBS_switch
+                switchCount_current = switchCount_current + 1;
+            end
+            previousBS_switch = connectedBS(wpIdx2);
+        end
+        
+        % 为基站分配颜色
+        uniqueBSOrder = [];
+        for i = 1:length(connectedBS)
+            if i == 1 || connectedBS(i) ~= connectedBS(i-1)
+                uniqueBSOrder = [uniqueBSOrder, connectedBS(i)];
+            end
+        end
+        numUsedBS = length(uniqueBSOrder);
+        numBS = size(baseStations, 1);
+        bsColors = zeros(numBS, 3);
+        
+        if numUsedBS > 0
+            goldenAngle = 0.618;
+            for idx = 1:numUsedBS
+                bsIdx = uniqueBSOrder(idx);
+                if bsIdx > 0 && bsIdx <= numBS
+                    hue = mod((idx - 1) * goldenAngle, 1);
+                    bsColors(bsIdx, :) = hsv2rgb([hue, 0.85, 0.95]);
+                end
+            end
+            for bsIdx = 1:numBS
+                if ~ismember(bsIdx, uniqueBSOrder)
+                    bsColors(bsIdx, :) = [0.85, 0.85, 0.85];
+                end
+            end
+        else
+            bsColors = lines(numBS);
+        end
+        
+        % 创建单独图
+        figure('Name', sprintf('%s - 路径与基站连接', currentName), ...
+               'Position', [100 + pathIdx*50, 100 + pathIdx*50, 1200, 900]);
+        hold on;
+        
+        % 绘制障碍物
+        if exist('obstacles', 'var') && ~isempty(obstacles) && ndims(obstacles) == 3
+            [gridX, gridY, ~] = size(obstacles);
+            obsCount = 0;
+            for x = 1:gridX
+                for y = 1:gridY
+                    obs = obstacles(x, y, :);
+                    obs = obs(:)';
+                    x_min = obs(1); y_min = obs(2);
+                    x_max = obs(3); y_max = obs(4);
+                    height = obs(5);
+                    
+                    vertices = [
+                        x_min, y_min, 0; x_max, y_min, 0;
+                        x_max, y_max, 0; x_min, y_max, 0;
+                        x_min, y_min, height; x_max, y_min, height;
+                        x_max, y_max, height; x_min, y_max, height
+                    ];
+                    faces = [1,2,3,4; 5,6,7,8; 1,2,6,5; 3,4,8,7; 1,4,8,5; 2,3,7,6];
+                    
+                    obsCount = obsCount + 1;
+                    if obsCount == 1
+                        patch('Faces', faces, 'Vertices', vertices, ...
+                             'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
+                             'EdgeColor', 'k', 'LineWidth', 1, ...
+                             'DisplayName', '建筑物障碍物');
+                    else
+                        patch('Faces', faces, 'Vertices', vertices, ...
+                             'FaceColor', [0.7, 0.7, 0.7], 'FaceAlpha', 0.3, ...
+                             'EdgeColor', 'k', 'LineWidth', 1, ...
+                             'HandleVisibility', 'off');
+                    end
+                end
+            end
+        end
+        
+        % 绘制预设路径
+        plot3(presetPath(:,1), presetPath(:,2), presetPath(:,3), 'b-o', ...
+             'LineWidth', 2, 'MarkerSize', 6, 'MarkerFaceColor', 'b', ...
+             'DisplayName', '预设路径');
+        
+        % 绘制基站
+        scatter3(baseStations(:,1), baseStations(:,2), baseStations(:,3), 200, 'r', '^', ...
+                'filled', 'LineWidth', 2, 'DisplayName', '基站（建筑物顶端）');
+        
+        % 绘制路径线段（按基站颜色）
+        for wpIdx = 1:numWaypoints-1
+            wp1 = currentPath(wpIdx, :);
+            wp2 = currentPath(wpIdx+1, :);
+            bsIdx = connectedBS(wpIdx);
+            plot3([wp1(1), wp2(1)], [wp1(2), wp2(2)], [wp1(3), wp2(3)], ...
+                 '-', 'Color', bsColors(bsIdx, :), 'LineWidth', 2.5);
+        end
+        
+        % 绘制航点和基站虚线连接
+        for wpIdx = 1:numWaypoints
+            waypoint = currentPath(wpIdx, :);
+            bsIdx = connectedBS(wpIdx);
+            
+            % 绘制航点
+            scatter3(waypoint(1), waypoint(2), waypoint(3), 150, ...
+                    bsColors(bsIdx, :), currentMarker, 'filled', ...
+                    'LineWidth', 2, 'MarkerEdgeColor', 'k');
+            
+            % 添加文本标签
+            text(waypoint(1)+1, waypoint(2)+1, waypoint(3)+2, ...
+                 sprintf('WP%d\nBS%d', wpIdx, bsIdx), ...
+                 'FontSize', 8, 'Color', bsColors(bsIdx, :), ...
+                 'FontWeight', 'bold', 'HorizontalAlignment', 'left');
+            
+            % 绘制从航点到基站的虚线（关键！）
+            plot3([waypoint(1), baseStations(bsIdx, 1)], ...
+                 [waypoint(2), baseStations(bsIdx, 2)], ...
+                 [waypoint(3), baseStations(bsIdx, 3)], ...
+                 '--', 'Color', bsColors(bsIdx, :), 'LineWidth', 1, 'LineStyle', '--');
+        end
+        
+        % 添加基站标签
+        for bsIdx = 1:numBS
+            text(baseStations(bsIdx,1)+2, baseStations(bsIdx,2)+2, baseStations(bsIdx,3)+2, ...
+                 sprintf('BS%d', bsIdx), 'FontSize', 10, 'Color', 'red', ...
+                 'FontWeight', 'bold');
+        end
+        
+        % 设置标题和标签
+        xlabel('X坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
+        ylabel('Y坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
+        zlabel('Z坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        % 根据目标数量显示不同的标题
+        if numObjectives >= 3
+            coverageRatio_current = -currentPopObj(3);
+            title(sprintf('%s\n负信号强度=%.2f, 切换次数=%.1f, 覆盖率=%.1f%%', ...
+                         currentName, currentPopObj(1), switchCount_current, coverageRatio_current*100), ...
+                  'FontSize', 14, 'FontWeight', 'bold');
+        else
+            title(sprintf('%s\n负信号强度=%.2f, 切换次数=%.1f', ...
+                         currentName, currentPopObj(1), switchCount_current), ...
+                  'FontSize', 14, 'FontWeight', 'bold');
+        end
+        
+        grid on;
+        axis equal;
+        xlim([-5, 505]);
+        ylim([-5, 505]);
+        if obstacleDrawn && maxBuildingHeight > 0
+            zlim([-5, max(maxBuildingHeight + 10, 90)]);
+        else
+            zlim([-5, 90]);
+        end
+        
+        view(45, 30);
+        hold off;
+        
+        fprintf('  %s 图已创建\n', currentName);
+    end
     
     %% 打印解的完整目标值信息
     if numObjectives >= 3
