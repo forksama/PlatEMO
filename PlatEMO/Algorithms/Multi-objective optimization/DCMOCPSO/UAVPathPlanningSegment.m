@@ -331,8 +331,8 @@ classdef UAVPathPlanningSegment < PROBLEM
                 % 检查属性是否存在且不为空
                 if ~isprop(obj, 'originalProblem') || isempty(obj.originalProblem)
                     % 如果originalProblem未设置，返回默认参考点
-                    % 默认参考点：目标1=105, 目标2=3（与UAVPathPlanning相同）
-                    R = [105, 3];
+                    % 默认参考点：目标1=105, 目标2=3, 目标3=0.1（3目标）
+                    R = [105, 3, 0.1];
                 else
                     % 尝试使用原始问题的参考点
                     R = obj.originalProblem.GetOptimum(N);
@@ -340,7 +340,7 @@ classdef UAVPathPlanningSegment < PROBLEM
             catch ME
                 % 如果访问失败（例如originalProblem还未初始化），返回默认参考点
                 % 这通常发生在PROBLEM构造函数调用GetOptimum时
-                R = [105, 3];
+                R = [105, 3, 0.1];
             end
         end
         

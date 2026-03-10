@@ -8,9 +8,10 @@ classdef UAVPathPlanning < PROBLEM
 % 在区域内随机分布着一些地面基站，在每个航点都可以求得无人机当前连接的
 % 基站的信号强度；无人机在每个航点，会根据信号强度进行是否切换的判断。
 %
-% 两个优化目标：
+% 三个优化目标：
 % 1. 最大化全程的平均信号强度（转换为最小化负的平均信号强度）
 % 2. 最小化切换次数
+% 3. 最大化路径覆盖率（转换为最小化负的覆盖率）
 %
 % 参数说明：
 % bsPerKm2 --- 100 --- 每平方公里基站数量
@@ -50,6 +51,8 @@ classdef UAVPathPlanning < PROBLEM
         presetWaypoints; % 预设航点位置（在预设路径上均匀分布，numWaypoints x 3）
         waypointSegmentMapping; % 航点到路径段的映射（numWaypoints x 1），每个值表示对应的路径段索引（1到numPresetPoints-1）
         xyBound; % XY平面边界约束（numPresetPoints-1 x 4），每行包含[kLower, cLower, kUpper, cUpper]，对应一个路径段
+        % coverageRadius不再使用固定值：覆盖半径取每个航点当前高度z（r = waypoint(3)）
+        % coverageRadius; 
     end
     
     methods
@@ -79,7 +82,7 @@ classdef UAVPathPlanning < PROBLEM
         %% 默认设置
         function Setting(obj)
             % 参数设置
-            if isempty(obj.M); obj.M = 2; end  % 两个目标
+            if isempty(obj.M); obj.M = 3; end  % 三个目标
             
             % 注意：D维度会自动计算，忽略用户传递的D参数
             % 保存用户可能传递的lower和upper（如果有），但会在计算D后重新设置
@@ -127,14 +130,17 @@ classdef UAVPathPlanning < PROBLEM
             end
             
             % 固定使用α=0.3, β=500, γ=40
-            alpha = 0.3;  % 城市密度比
-            beta = 500;   % 建筑密度（栋/km²）
+            alpha = 0.3265;  % 城市密度比
+            beta = 204.08;   % 建筑密度（栋/km²）
             gamma = 40;   % 瑞利分布参数（m）
             
             obj.velocity = velocity;
             obj.TTT = TTT;
             obj.switchThreshold = switchThreshold;
             obj.obstacleMethod = obstacleMethod;
+            
+            % 覆盖半径不再使用固定值：覆盖半径取每个航点当前高度z（r = waypoint(3)）
+            % 因此这里不再设置obj.coverageRadius
             
             % 保存建筑物建模参数（用于生成和加载）
             obj.alpha = alpha;
@@ -613,6 +619,10 @@ classdef UAVPathPlanning < PROBLEM
                 % 目标2：最小化切换次数
                 switchCount = obj.calculateSwitchCount(waypoints);
                 PopObj(i, 2) = switchCount;
+                
+                % 目标3：最大化路径覆盖率（转换为最小化负的覆盖率）
+                coverageRatio = obj.calculatePathCoverageRatio(waypoints);
+                PopObj(i, 3) = -coverageRatio;  % 取负值，因为要最小化
             end
         end
         
@@ -735,6 +745,274 @@ classdef UAVPathPlanning < PROBLEM
             deviation = totalDeviation / numWaypoints;  % 平均偏离距离
         end
         
+        %% 计算圆柱体与预设路径段的相交长度
+        function intersectionLength = calculateCylinderSegmentIntersection(obj, waypointXY, waypointRadius, segmentStartXY, segmentEndXY)
+            %calculateCylinderSegmentIntersection - 计算圆柱体与路径段的相交长度
+            %
+            %   计算以航点为圆心（XY平面投影）的圆柱体与预设路径段（XY平面投影）的相交长度
+            %   圆柱体垂直于地面，半径取该航点当前高度z（r = waypoint(3)）
+            %
+            %   输入：
+            %       waypointXY - 航点的XY坐标（1 x 2）
+            %       waypointRadius - 航点对应的覆盖半径（标量，单位：米），通常等于航点高度z
+            %       segmentStartXY - 路径段起点的XY坐标（1 x 2）
+            %       segmentEndXY - 路径段终点的XY坐标（1 x 2）
+            %
+            %   输出：
+            %       intersectionLength - 相交部分的长度
+            
+            % 航点位置
+            cx = waypointXY(1);
+            cy = waypointXY(2);
+            
+            % 路径段端点
+            x1 = segmentStartXY(1);
+            y1 = segmentStartXY(2);
+            x2 = segmentEndXY(1);
+            y2 = segmentEndXY(2);
+            
+            % 圆半径（由航点高度决定）
+            r = waypointRadius;
+            
+            % 线段向量
+            dx = x2 - x1;
+            dy = y2 - y1;
+            segmentLength = sqrt(dx^2 + dy^2);
+            
+            % 如果线段长度为0，返回0
+            if segmentLength < 1e-10
+                intersectionLength = 0;
+                return;
+            end
+            
+            % 归一化方向向量
+            ux = dx / segmentLength;
+            uy = dy / segmentLength;
+            
+            % 从线段起点到圆心的向量
+            fx = cx - x1;
+            fy = cy - y1;
+            
+            % 计算圆心到线段的距离（投影）
+            % t是圆心在线段方向上的投影参数（t=0在起点，t=segmentLength在终点）
+            t = fx * ux + fy * uy;
+            
+            % 限制t在[0, segmentLength]范围内，找到线段上最接近圆心的点
+            t = max(0, min(segmentLength, t));
+            
+            % 最接近点的坐标
+            closestX = x1 + t * ux;
+            closestY = y1 + t * uy;
+            
+            % 圆心到最接近点的距离
+            distToSegment = sqrt((cx - closestX)^2 + (cy - closestY)^2);
+            
+            % 如果圆心到线段的距离大于半径，没有相交
+            if distToSegment > r
+                intersectionLength = 0;
+                return;
+            end
+            
+            % 使用圆与直线相交的数学公式
+            % 将线段参数化为：P(s) = P1 + s*(P2-P1)，s∈[0,1]
+            % 圆心到直线的距离：d = distToSegment
+            % 相交弦长：2 * sqrt(r^2 - d^2)
+            
+            % 计算圆心到无限直线的距离
+            % 使用点到直线的距离公式
+            if abs(dx) < 1e-10 && abs(dy) < 1e-10
+                % 线段退化为点
+                intersectionLength = 0;
+                return;
+            end
+            
+            % 点到直线距离：|ax0 + by0 + c| / sqrt(a^2 + b^2)
+            % 直线方程：dy*x - dx*y + (dx*y1 - dy*x1) = 0
+            a = dy;
+            b = -dx;
+            c = dx*y1 - dy*x1;
+            distToLine = abs(a*cx + b*cy + c) / sqrt(a^2 + b^2);
+            
+            % 如果圆心到直线的距离大于半径，没有相交
+            if distToLine > r
+                intersectionLength = 0;
+                return;
+            end
+            
+            % 计算相交弦的半长
+            halfChordLength = sqrt(r^2 - distToLine^2);
+            
+            % 圆心在直线上的投影点参数（s∈[0,1]表示在线段上）
+            % t是从起点沿线段方向的距离，转换为参数s
+            s_center = t / segmentLength;
+            
+            % 相交区间的两个端点参数（在线段方向上）
+            % 从圆心投影点向两侧延伸halfChordLength
+            t1 = t - halfChordLength;
+            t2 = t + halfChordLength;
+            
+            % 限制在线段范围内[0, segmentLength]
+            t1 = max(0, t1);
+            t2 = min(segmentLength, t2);
+            
+            % 计算相交长度
+            intersectionLength = max(0, t2 - t1);
+        end
+        
+        %% 计算路径覆盖率
+        function coverageRatio = calculatePathCoverageRatio(obj, waypoints)
+            %calculatePathCoverageRatio - 计算路径覆盖率
+            %
+            %   对每个航点，只计算在当前"所属"的预设路径段内的覆盖路径长度。
+            %   不同航点若覆盖路径有重叠，不重复计算重叠的部分。
+            %   路径覆盖率为总覆盖长度/路径总长度。
+            %
+            %   输入：
+            %       waypoints - 航点坐标（numWaypoints x 3）
+            %
+            %   输出：
+            %       coverageRatio - 路径覆盖率（0到1之间）
+            
+            numWaypoints = size(waypoints, 1);
+            numPresetPoints = size(obj.presetPath, 1);
+            numSegments = numPresetPoints - 1;
+            
+            % 获取航点到路径段的映射
+            segmentMapping = obj.getWaypointSegmentMapping();
+            
+            % 对每个路径段，存储被覆盖的区间
+            % segmentCoverage{i} 是一个 N x 2 的矩阵，每行是一个覆盖区间 [start, end]
+            % start和end是从路径段起点开始的距离（0到segmentLength）
+            segmentCoverage = cell(numSegments, 1);
+            for i = 1:numSegments
+                segmentCoverage{i} = [];
+            end
+            
+            % 对每个航点，计算其在所属路径段内的覆盖区间
+            for j = 1:numWaypoints
+                waypoint = waypoints(j, :);
+                waypointXY = waypoint(1:2);  % XY坐标
+                
+                % 获取航点对应的路径段索引
+                segmentIdx = segmentMapping(j);
+                
+                % 获取路径段的起点和终点（XY坐标）
+                segmentStartXY = obj.presetPath(segmentIdx, 1:2);
+                segmentEndXY = obj.presetPath(segmentIdx+1, 1:2);
+                
+                % 计算路径段长度
+                segmentLength = norm(segmentEndXY - segmentStartXY);
+                
+                if segmentLength < 1e-10
+                    % 路径段长度为0，跳过
+                    continue;
+                end
+                
+                % 覆盖半径取航点当前高度z
+                waypointRadius = waypoint(3) * sqrt(3) / 3;
+                
+                % 计算圆柱体与路径段的相交长度
+                intersectionLength = obj.calculateCylinderSegmentIntersection(waypointXY, waypointRadius, segmentStartXY, segmentEndXY);
+                
+                if intersectionLength > 1e-10
+                    % 计算相交区间在路径段上的位置
+                    % 需要找到相交区间的起点和终点在路径段上的参数（0到segmentLength）
+                    
+                    % 圆心位置
+                    cx = waypointXY(1);
+                    cy = waypointXY(2);
+                    
+                    % 路径段起点和方向
+                    x1 = segmentStartXY(1);
+                    y1 = segmentStartXY(2);
+                    dx = segmentEndXY(1) - x1;
+                    dy = segmentEndXY(2) - y1;
+                    
+                    % 归一化方向向量
+                    ux = dx / segmentLength;
+                    uy = dy / segmentLength;
+                    
+                    % 从线段起点到圆心的向量
+                    fx = cx - x1;
+                    fy = cy - y1;
+                    
+                    % 圆心在线段上的投影参数
+                    t_center = fx * ux + fy * uy;
+                    
+                    % 圆半径（由航点高度决定）
+                    r = waypointRadius;
+                    
+                    % 圆心到直线的距离
+                    a = dy;
+                    b = -dx;
+                    c = dx*y1 - dy*x1;
+                    distToLine = abs(a*cx + b*cy + c) / sqrt(a^2 + b^2);
+                    
+                    if distToLine <= r
+                        % 计算相交弦的半长
+                        halfChordLength = sqrt(r^2 - distToLine^2);
+                        
+                        % 相交区间
+                        t1 = max(0, t_center - halfChordLength);
+                        t2 = min(segmentLength, t_center + halfChordLength);
+                        
+                        % 添加到该路径段的覆盖区间列表
+                        if t2 > t1
+                            segmentCoverage{segmentIdx} = [segmentCoverage{segmentIdx}; t1, t2];
+                        end
+                    end
+                end
+            end
+            
+            % 对每个路径段，合并重叠的覆盖区间，计算总覆盖长度
+            totalCoveredLength = 0;
+            
+            for i = 1:numSegments
+                intervals = segmentCoverage{i};
+                
+                if isempty(intervals)
+                    continue;
+                end
+                
+                % 合并重叠区间
+                % 1. 按起点排序
+                intervals = sortrows(intervals, 1);
+                
+                % 2. 合并重叠区间
+                mergedIntervals = [];
+                currentStart = intervals(1, 1);
+                currentEnd = intervals(1, 2);
+                
+                for k = 2:size(intervals, 1)
+                    if intervals(k, 1) <= currentEnd
+                        % 重叠，扩展当前区间
+                        currentEnd = max(currentEnd, intervals(k, 2));
+                    else
+                        % 不重叠，保存当前区间，开始新区间
+                        mergedIntervals = [mergedIntervals; currentStart, currentEnd];
+                        currentStart = intervals(k, 1);
+                        currentEnd = intervals(k, 2);
+                    end
+                end
+                % 保存最后一个区间
+                mergedIntervals = [mergedIntervals; currentStart, currentEnd];
+                
+                % 计算该路径段的总覆盖长度
+                segmentCoveredLength = sum(mergedIntervals(:, 2) - mergedIntervals(:, 1));
+                totalCoveredLength = totalCoveredLength + segmentCoveredLength;
+            end
+            
+            % 计算覆盖率
+            if obj.pathLength > 0
+                coverageRatio = totalCoveredLength / obj.pathLength;
+            else
+                coverageRatio = 0;
+            end
+            
+            % 确保覆盖率在[0, 1]范围内
+            coverageRatio = max(0, min(1, coverageRatio));
+        end
+        
         %% 在预设路径上按距离均匀分布生成航点
         function presetWaypoints = generateUniformWaypoints(obj)
             % 在预设路径上按距离均匀分布生成航点
@@ -813,6 +1091,7 @@ classdef UAVPathPlanning < PROBLEM
             % 目标值范围估计：
             % - 目标1（-avgSignal）：信号强度通常在-100到-50 dBm，所以-avgSignal在50到100
             % - 目标2（switchCount）：切换次数在0到numWaypoints之间
+            % - 目标3（-coverageRatio）：覆盖率在0到1之间，所以-coverageRatio在-1到0之间
             %
             % 使用保守的上界，确保覆盖所有可能的解
             
@@ -826,8 +1105,10 @@ classdef UAVPathPlanning < PROBLEM
             %   设置参考点为200，确保覆盖所有情况
             % - 目标2（switchCount）：最坏情况每个航点都切换，最多numWaypoints次
             %   设置参考点为numWaypoints*1.5，足够大
+            % - 目标3（-coverageRatio）：最差情况覆盖率为0，所以-coverageRatio为0
+            %   设置参考点为0.1（比0稍大一点），确保覆盖所有情况
             
-            R = [105, 3];
+            R = [105, 3, 0.1];
             
             % 注意：如果HV仍然为0，可能是以下原因：
             % 1. 参考点仍然太小，实际解比参考点还差
@@ -854,9 +1135,9 @@ classdef UAVPathPlanning < PROBLEM
             if method == 0  % 0 = 固定预设路径
                 % 固定的预设路径点（按顺序）
                 presetPath = [
-                    40,   40,  40;   % 起点
-                    123,  40,  40;
-                    123,  150, 40
+                    280,  280,  40;   % 起点
+                    140,  280,  40;
+                    140,  100,  40
                 ];
                 
                 % XY平面边界约束（xyBound）
@@ -868,8 +1149,8 @@ classdef UAVPathPlanning < PROBLEM
                 %     * 当kUpper为realmax时，满足x < cUpper
                 % 示例：对于路径段[40,40,40]到[80,40,40]，约束y>33且y<50
                 obj.xyBound = [
-                    0, 33, 0, 50;  % 路径段1：[40,40,40]到[80,40,40]
-                    realmax, 117, realmax, 133   % 路径段2：[123,40,40]到[123,150,40]
+                    0, 265, 0, 295;  % 路径段1：[40,40,40]到[80,40,40]
+                    realmax, 125, realmax, 155   % 路径段2：[123,40,40]到[123,150,40]
                 ];
                 
                 % presetPath = [
@@ -1017,48 +1298,51 @@ classdef UAVPathPlanning < PROBLEM
                 end
                 
                 % 如果生成的建筑物数量少于N，调整网格大小
-                if buildingCount < N
-                    % 增加网格密度
-                    gridX = ceil(sqrt(N * map_width / map_height));
-                    gridY = ceil(sqrt(N * map_height / map_width));
-                    obstacles = zeros(gridX, gridY, 5);
-                    
-                    buildingCount = 0;
-                    for x = 1:gridX
-                        for y = 1:gridY
-                            center_x = map_x_min + (x - 0.5) * (map_width / gridX);
-                            center_y = map_y_min + (y - 0.5) * (map_height / gridY);
-                            
-                            if center_x >= map_x_min && center_x <= map_x_max && ...
-                               center_y >= map_y_min && center_y <= map_y_max
-                                
-                                x_min = center_x - W / 2;
-                                y_min = center_y - W / 2;
-                                x_max = center_x + W / 2;
-                                y_max = center_y + W / 2;
-                                
-                                x_min = max(x_min, map_x_min);
-                                y_min = max(y_min, map_y_min);
-                                x_max = min(x_max, map_x_max);
-                                y_max = min(y_max, map_y_max);
-                                
-                                U = rand();
-                                height = obj.gamma * sqrt(-2 * log(1 - U));
-                                height = max(1, min(200, height));
-                                
-                                obstacles(x, y, :) = [x_min, y_min, x_max, y_max, height];
-                                buildingCount = buildingCount + 1;
-                                
-                                if buildingCount >= N
-                                    break;
-                                end
-                            end
-                        end
-                        if buildingCount >= N
-                            break;
-                        end
-                    end
-                end
+                % NOTE(临时)：按需求暂不启用“buildingCount < N 时提高网格密度并重生成建筑物”的逻辑。
+                % 这会导致最终实际生成的建筑数量可能小于 N（即实际建筑密度略低于 beta）。
+                %
+                % if buildingCount < N
+                %     % 增加网格密度
+                %     gridX = ceil(sqrt(N * map_width / map_height));
+                %     gridY = ceil(sqrt(N * map_height / map_width));
+                %     obstacles = zeros(gridX, gridY, 5);
+                %     
+                %     buildingCount = 0;
+                %     for x = 1:gridX
+                %         for y = 1:gridY
+                %             center_x = map_x_min + (x - 0.5) * (map_width / gridX);
+                %             center_y = map_y_min + (y - 0.5) * (map_height / gridY);
+                %             
+                %             if center_x >= map_x_min && center_x <= map_x_max && ...
+                %                center_y >= map_y_min && center_y <= map_y_max
+                %                 
+                %                 x_min = center_x - W / 2;
+                %                 y_min = center_y - W / 2;
+                %                 x_max = center_x + W / 2;
+                %                 y_max = center_y + W / 2;
+                %                 
+                %                 x_min = max(x_min, map_x_min);
+                %                 y_min = max(y_min, map_y_min);
+                %                 x_max = min(x_max, map_x_max);
+                %                 y_max = min(y_max, map_y_max);
+                %                 
+                %                 U = rand();
+                %                 height = obj.gamma * sqrt(-2 * log(1 - U));
+                %                 height = max(1, min(200, height));
+                %                 
+                %                 obstacles(x, y, :) = [x_min, y_min, x_max, y_max, height];
+                %                 buildingCount = buildingCount + 1;
+                %                 
+                %                 if buildingCount >= N
+                %                     break;
+                %                 end
+                %             end
+                %         end
+                %         if buildingCount >= N
+                %             break;
+                %         end
+                %     end
+                % end
                 
                 % 保存网格大小
                 obj.obstacleGridSize = [gridX, gridY];

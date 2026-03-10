@@ -16,7 +16,7 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 % 参数格式：{numSegments, segmentOverlap}
 %   numSegments: 将问题分成多少段（子问题数量），默认5
 %   segmentOverlap: 相邻段之间的重叠航点数，默认1
-Algorithm = DCMOCPSO('parameter', {10, 1});
+Algorithm = DCMOCPSO('parameter', {2, 1});
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
@@ -25,7 +25,7 @@ Algorithm = DCMOCPSO('parameter', {10, 1});
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 50, 'maxFE', 100, 'parameter', {100, 10, 1, -85, 0});
+Problem = UAVPathPlanning('N', 50, 'maxFE', 1000, 'parameter', {96, 10, 4, -85, 0});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
@@ -51,34 +51,56 @@ fprintf('\n=== 提取最优解并可视化 ===\n');
 
 if length(finalPopulation) >= 1
     % 提取所有解的目标值
-    PopObj = finalPopulation.objs;  % N×2矩阵，每行是一个解的目标值（两个目标）
+    PopObj = finalPopulation.objs;  % N×M矩阵，每行是一个解的目标值
     % 目标1：负平均信号强度（越小越好，即平均信号强度越大越好）
     % 目标2：切换次数（越小越好）
+    % 目标3：负覆盖率（越小越好，即覆盖率越大越好）
+    
+    numObjectives = size(PopObj, 2);
+    fprintf('目标数量: %d\n', numObjectives);
     
     % 找到每个目标的最优解
-    [~, idx_obj1] = min(PopObj(:,1));  % 目标1最优（负信号强度最小，即信号强度最大）
-    [~, idx_obj2] = min(PopObj(:,2));  % 目标2最优（切换次数最小）
+    [~, idx_obj1] = min(PopObj(:,1));  % 目标1最优
+    [~, idx_obj2] = min(PopObj(:,2));  % 目标2最优
+    
+    if numObjectives >= 3
+        [~, idx_obj3] = min(PopObj(:,3));  % 目标3最优（覆盖率最大）
+    end
     
     fprintf('目标1最优解索引: %d (负平均信号强度=%.4f)\n', idx_obj1, PopObj(idx_obj1,1));
     fprintf('目标2最优解索引: %d (切换次数=%.4f)\n', idx_obj2, PopObj(idx_obj2,2));
+    if numObjectives >= 3
+        fprintf('目标3最优解索引: %d (负覆盖率=%.4f, 覆盖率=%.2f%%)\n', idx_obj3, PopObj(idx_obj3,3), -PopObj(idx_obj3,3)*100);
+    end
     
     % 如果只有一个解，使用同一个解
     if length(finalPopulation) == 1
         idx_obj2 = idx_obj1;
-        fprintf('注意：只有一个解，两个目标使用同一个解\n');
+        if numObjectives >= 3
+            idx_obj3 = idx_obj1;
+        end
+        fprintf('注意：只有一个解，所有目标使用同一个解\n');
     end
     
-    % 提取两个最优解的路径（3D坐标：x, y, z）
+    % 提取各目标最优解的路径（3D坐标：x, y, z）
     actualPath_obj1 = reshape(finalPopulation(idx_obj1).decs, 3, [])';
     actualPath_obj2 = reshape(finalPopulation(idx_obj2).decs, 3, [])';
+    if numObjectives >= 3
+        actualPath_obj3 = reshape(finalPopulation(idx_obj3).decs, 3, [])';
+    end
     
     % 创建对比图（3D）
-    figure('Name', 'DCMOCPSO: 两个目标最优解的路径对比', 'Position', [100, 100, 1400, 900]);
+    if numObjectives >= 3
+        figName = 'DCMOCPSO: 三个目标最优解的路径对比';
+    else
+        figName = 'DCMOCPSO: 两个目标最优解的路径对比';  % M<3兼容
+    end
+    figure('Name', figName, 'Position', [100, 100, 1400, 900]);
     
     % 加载预设路径、基站和障碍物
     % 文件名格式：UAVPathPlanning-%d-%d.mat（包含障碍物方法和每平方公里基站数量）
     obstacleMethod = 0;  % 与Problem创建时使用的障碍物方法一致
-    bsPerKm2 = 100;    % 与Problem创建时使用的每平方公里基站数量一致
+    bsPerKm2 = 96;    % 与Problem创建时使用的每平方公里基站数量一致
     file = sprintf('UAVPathPlanning-%d-%d.mat', obstacleMethod, bsPerKm2);
     file = fullfile(fileparts(which('UAVPathPlanning')), file);
     
@@ -224,31 +246,67 @@ if length(finalPopulation) >= 1
     scatter3(baseStations(:,1), baseStations(:,2), baseStations(:,3), 200, 'r', '^', ...
             'filled', 'LineWidth', 2, 'DisplayName', '基站（建筑物顶端）');
     
-    % 重新计算切换次数以确保一致性（使用相同的Problem对象和参数）
-    fprintf('重新计算两个最优解的切换次数以确保一致性...\n');
+    % 重新计算切换次数（以及覆盖率）以确保一致性
+    fprintf('重新计算最优解的切换次数（以及覆盖率）...\n');
     switchCount_obj1 = Problem.calculateSwitchCount(actualPath_obj1);
     switchCount_obj2 = Problem.calculateSwitchCount(actualPath_obj2);
+    if numObjectives >= 3
+        switchCount_obj3 = Problem.calculateSwitchCount(actualPath_obj3);
+    end
     
     fprintf('  目标1最优：切换次数=%.1f (原值=%.1f)\n', switchCount_obj1, PopObj(idx_obj1,2));
     fprintf('  目标2最优：切换次数=%.1f (原值=%.1f)\n', switchCount_obj2, PopObj(idx_obj2,2));
+    if numObjectives >= 3
+        coverageRatio_obj1 = Problem.calculatePathCoverageRatio(actualPath_obj1);
+        coverageRatio_obj2 = Problem.calculatePathCoverageRatio(actualPath_obj2);
+        coverageRatio_obj3 = Problem.calculatePathCoverageRatio(actualPath_obj3);
+        fprintf('  目标3最优：切换次数=%.1f (原值=%.1f), 覆盖率=%.2f%% (原值=%.2f%%)\n', ...
+            switchCount_obj3, PopObj(idx_obj3,2), coverageRatio_obj3*100, -PopObj(idx_obj3,3)*100);
+    end
     
-    % 绘制两个目标的最优解（3D）
+    % 绘制各目标的最优解（3D）
     % 目标1最优：信号强度最大（绿色）
-    plot3(actualPath_obj1(:,1), actualPath_obj1(:,2), actualPath_obj1(:,3), 'g-s', ...
-         'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'g', ...
-         'DisplayName', sprintf('目标1最优（信号强度最大）\n负信号强度=%.2f, 切换次数=%.1f', ...
-                                PopObj(idx_obj1,1), switchCount_obj1));
+    if numObjectives >= 3
+        plot3(actualPath_obj1(:,1), actualPath_obj1(:,2), actualPath_obj1(:,3), 'g-s', ...
+             'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'g', ...
+             'DisplayName', sprintf('目标1最优（信号强度最大）\n负信号强度=%.2f, 切换次数=%.1f, 覆盖率=%.1f%%', ...
+                                    PopObj(idx_obj1,1), switchCount_obj1, coverageRatio_obj1*100));
+    else
+        plot3(actualPath_obj1(:,1), actualPath_obj1(:,2), actualPath_obj1(:,3), 'g-s', ...
+             'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'g', ...
+             'DisplayName', sprintf('目标1最优（信号强度最大）\n负信号强度=%.2f, 切换次数=%.1f', ...
+                                    PopObj(idx_obj1,1), switchCount_obj1));
+    end
     
     % 目标2最优：切换次数最小（品红色）
-    plot3(actualPath_obj2(:,1), actualPath_obj2(:,2), actualPath_obj2(:,3), 'm-d', ...
-         'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'm', ...
-         'DisplayName', sprintf('目标2最优（切换次数最小）\n负信号强度=%.2f, 切换次数=%.1f', ...
-                                PopObj(idx_obj2,1), switchCount_obj2));
+    if numObjectives >= 3
+        plot3(actualPath_obj2(:,1), actualPath_obj2(:,2), actualPath_obj2(:,3), 'm-d', ...
+             'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'm', ...
+             'DisplayName', sprintf('目标2最优（切换次数最小）\n负信号强度=%.2f, 切换次数=%.1f, 覆盖率=%.1f%%', ...
+                                    PopObj(idx_obj2,1), switchCount_obj2, coverageRatio_obj2*100));
+    else
+        plot3(actualPath_obj2(:,1), actualPath_obj2(:,2), actualPath_obj2(:,3), 'm-d', ...
+             'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'm', ...
+             'DisplayName', sprintf('目标2最优（切换次数最小）\n负信号强度=%.2f, 切换次数=%.1f', ...
+                                    PopObj(idx_obj2,1), switchCount_obj2));
+    end
+
+    % 目标3最优：覆盖率最大（青色）
+    if numObjectives >= 3
+        plot3(actualPath_obj3(:,1), actualPath_obj3(:,2), actualPath_obj3(:,3), 'c-p', ...
+             'LineWidth', 2.5, 'MarkerSize', 7, 'MarkerFaceColor', 'c', ...
+             'DisplayName', sprintf('目标3最优（覆盖率最大）\n负信号强度=%.2f, 切换次数=%.1f, 覆盖率=%.1f%%', ...
+                                    PopObj(idx_obj3,1), switchCount_obj3, coverageRatio_obj3*100));
+    end
     
     xlabel('X坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
     ylabel('Y坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
     zlabel('Z坐标 (m)', 'FontSize', 12, 'FontWeight', 'bold');
-    title('DCMOCPSO: 两个目标最优解的路径对比（3D）', 'FontSize', 14, 'FontWeight', 'bold');
+    if numObjectives >= 3
+        title('DCMOCPSO: 三个目标最优解的路径对比（3D）', 'FontSize', 14, 'FontWeight', 'bold');
+    else
+        title('DCMOCPSO: 两个目标最优解的路径对比（3D）', 'FontSize', 14, 'FontWeight', 'bold');
+    end
     legend('Location', 'best', 'FontSize', 9);
     grid on;
     axis equal;
@@ -273,13 +331,29 @@ if length(finalPopulation) >= 1
     hold off;
     
     %% 打印解的完整目标值信息
-    fprintf('\n两个最优解的完整目标值：\n');
+    if numObjectives >= 3
+        fprintf('\n三个最优解的完整目标值：\n');
+    else
+        fprintf('\n两个/三个最优解的完整目标值：\n');
+    end
     fprintf('  目标1最优解：\n');
     fprintf('    负平均信号强度: %.4f\n', PopObj(idx_obj1,1));
     fprintf('    切换次数: %.1f\n', PopObj(idx_obj1,2));
+    if numObjectives >= 3
+        fprintf('    负覆盖率: %.4f (覆盖率=%.2f%%)\n', PopObj(idx_obj1,3), -PopObj(idx_obj1,3)*100);
+    end
     fprintf('  目标2最优解：\n');
     fprintf('    负平均信号强度: %.4f\n', PopObj(idx_obj2,1));
     fprintf('    切换次数: %.1f\n', PopObj(idx_obj2,2));
+    if numObjectives >= 3
+        fprintf('    负覆盖率: %.4f (覆盖率=%.2f%%)\n', PopObj(idx_obj2,3), -PopObj(idx_obj2,3)*100);
+    end
+    if numObjectives >= 3
+        fprintf('  目标3最优解：\n');
+        fprintf('    负平均信号强度: %.4f\n', PopObj(idx_obj3,1));
+        fprintf('    切换次数: %.1f\n', PopObj(idx_obj3,2));
+        fprintf('    负覆盖率: %.4f (覆盖率=%.2f%%)\n', PopObj(idx_obj3,3), -PopObj(idx_obj3,3)*100);
+    end
     
     %% 显示分治算法的统计信息
     fprintf('\n=== DCMOCPSO算法统计信息 ===\n');
