@@ -88,7 +88,8 @@ methods
                     presetPathStart = fullWaypoints(1, :);
                 end
                 
-                segmentMaxFE = floor(originalMaxFE / numSegments);
+                % 每段都使用完整的函数评估预算（不在段间平分）
+                segmentMaxFE = originalMaxFE;
                 SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, fullWaypoints, presetPathStart, segmentMaxFE);
                 SubProblem.FE = 0;
                 
@@ -147,11 +148,9 @@ methods
                 numPrevSolutions = length(AllSolutions);
                 fprintf('为前一段的 %d 条路径分别求解当前段...\n', numPrevSolutions);
                 
-                % 为每条前段路径分配FE
-                segmentMaxFEPerPath = floor((originalMaxFE / numSegments) / numPrevSolutions);
-                if segmentMaxFEPerPath < 100
-                    segmentMaxFEPerPath = 100;  % 至少100次评估
-                end
+                % 每段都使用完整的函数评估预算（不在段间/路径间平分）
+                segmentMaxFEPerPath = originalMaxFE;
+                % 注意：此设置会导致总FE可能显著超过Problem.maxFE（按真实累计统计）
                 
                 CombinedSolutions = [];  % 存储所有组合后的路径
                 totalSubFE = 0;
