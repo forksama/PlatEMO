@@ -43,7 +43,7 @@ methods
         Algorithm.useDynamicGrouping = useDynamicGrouping;
         
         %% Generate random population
-        [V,~] = UniformPoint(Problem.N, Problem.M);
+        [V,~] = UniformPoint(Problem.N * 100, Problem.M);
         Population = Problem.Initialization();
         Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda);
         

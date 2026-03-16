@@ -42,7 +42,7 @@ methods
 
         %% Generate random population
         % 生成三倍于N的参考向量
-        [V,~] = UniformPoint(Problem.N,Problem.M);
+        [V,~] = UniformPoint(Problem.N * 100,Problem.M);
         Population = Problem.Initialization();
         Population = EnvironmentalSelection(Population,V,(Problem.FE/Problem.maxFE)^2);
         
