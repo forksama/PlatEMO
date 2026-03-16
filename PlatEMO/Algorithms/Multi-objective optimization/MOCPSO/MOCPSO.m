@@ -18,8 +18,16 @@ classdef MOCPSO < ALGORITHM
 % for evolutionary multi-objective optimization [educational forum], IEEE
 % Computational Intelligence Magazine, 2017, 12(4): 73-87".
 %--------------------------------------------------------------------------
+properties
+    useDynamicMutation = false;   % 是否使用动态变异率
+end
+
 methods
     function main(Algorithm,Problem)
+        
+        %% 参数设置
+        useDynamicMutation = Algorithm.ParameterSet(false);
+        Algorithm.useDynamicMutation = useDynamicMutation;
 
         %% TODO
         % 1. 目前算法中在适应度以及环境筛选中，都进行了归一化，对多目标没有进行权重设置
@@ -92,7 +100,14 @@ methods
                     disp(size(Population));
                     [N,D]     = size(Population.decs);
                     PopVel  = Population.adds(zeros(N,D));
-                    Offspring = Polynomial_mutation(Problem,Population.decs,PopVel,N/2,D);
+                    % 根据开关决定是否使用动态变异率
+                    if useDynamicMutation
+                        t = Problem.FE / Problem.maxFE;
+                        mutationRateMultiplier = getMutationRateMultiplier(t);
+                    else
+                        mutationRateMultiplier = 1.0;  % 使用固定变异率
+                    end
+                    Offspring = Polynomial_mutation(Problem,Population.decs,PopVel,N/2,D,mutationRateMultiplier);
                     Population = EnvironmentalSelection([Population, Offspring],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
                     
                     % 检查环境选择后是否为空
@@ -145,8 +160,17 @@ methods
             [Loser1, Loser2] = swapWL(Loser1,Loser2,FitValue);
             [Winner, Loser1] = swapWL(Winner,Loser1,FitValue);
             [Loser1, Loser2] = swapWL(Loser1,Loser2,FitValue);
-            [Offspring1,Offspring2, Offspring3]      = Operator(Population(Loser1),Population(Loser2),Population(Winner));
-            Population     = EnvironmentalSelection([Population,Offspring1,Offspring2,Offspring3],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
+            
+            % 根据开关决定是否使用动态变异率
+            if useDynamicMutation
+                t = Problem.FE / Problem.maxFE;
+                mutationRateMultiplier = getMutationRateMultiplier(t);
+            else
+                mutationRateMultiplier = 1.0;  % 使用固定变异率
+            end
+            
+            [Offspring1,Offspring2, Offspring3] = Operator(Population(Loser1),Population(Loser2),Population(Winner),mutationRateMultiplier);
+            Population = EnvironmentalSelection([Population,Offspring1,Offspring2,Offspring3],V,(Problem.FE/Problem.maxFE)^2,isLastIteration);
             
             % 检查环境选择后是否为空
             if isempty(Population)

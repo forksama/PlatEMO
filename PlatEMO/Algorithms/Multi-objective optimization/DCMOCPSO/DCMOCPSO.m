@@ -15,6 +15,9 @@ classdef DCMOCPSO < ALGORITHM
 % useDynamicGrouping --- false --- 是否使用动态分组比例（MOCPSO_Ek参数）
 %   false: 使用原始1:1:1均匀分组 + swapWL竞争
 %   true:  使用动态分组比例 (0-25%:2:1:1, 25-75%:1:1:1, 75-100%:1:1:2)
+% useDynamicMutation --- false --- 是否使用动态变异率（MOCPSO_Ek参数）
+%   false: 使用固定变异率 1/D
+%   true:  使用动态变异率 (0-20%:2x, 20-40%:1.5x, 40-60%:1x, 60-80%:0.75x, 80-100%:0.5x)
 %
 %------------------------------- Copyright --------------------------------
 % Copyright (c) 2022 BIMK Group. You are free to use the PlatEMO for
@@ -26,22 +29,24 @@ classdef DCMOCPSO < ALGORITHM
 %--------------------------------------------------------------------------
 
 properties
-    numSegments = 5;              % 分段数量
-    segmentOverlap = 1;           % 相邻段之间的重叠航点数
-    lambda = 0.5;                 % E_k影响权重 (MOCPSO_Ek参数)
-    c_guide = 0.3;                % 引导粒子权重 (MOCPSO_Ek参数)
-    useDynamicGrouping = false;   % 是否使用动态分组比例 (MOCPSO_Ek参数)
+    numSegments = 5;                % 分段数量
+    segmentOverlap = 1;             % 相邻段之间的重叠航点数
+    lambda = 0.5;                   % E_k影响权重 (MOCPSO_Ek参数)
+    c_guide = 0.3;                  % 引导粒子权重 (MOCPSO_Ek参数)
+    useDynamicGrouping = false;     % 是否使用动态分组比例 (MOCPSO_Ek参数)
+    useDynamicMutation = false;     % 是否使用动态变异率 (MOCPSO_Ek参数)
 end
 
 methods
     function main(Algorithm, Problem)
         %% 参数设置
-        [numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping] = Algorithm.ParameterSet(5, 1, 0.5, 0.3, false);
+        [numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation] = Algorithm.ParameterSet(5, 1, 0.5, 0.3, false, false);
         Algorithm.numSegments = numSegments;
         Algorithm.segmentOverlap = segmentOverlap;
         Algorithm.lambda = lambda;
         Algorithm.c_guide = c_guide;
         Algorithm.useDynamicGrouping = useDynamicGrouping;
+        Algorithm.useDynamicMutation = useDynamicMutation;
         
         % 检查问题类型
         if ~isa(Problem, 'UAVPathPlanning')
@@ -115,6 +120,7 @@ methods
                 MOCPSOAlg.lambda = lambda;
                 MOCPSOAlg.c_guide = c_guide;
                 MOCPSOAlg.useDynamicGrouping = useDynamicGrouping;
+                MOCPSOAlg.useDynamicMutation = useDynamicMutation;
                 previousProblem = PROBLEM.Current();
                 
                 try
@@ -193,6 +199,7 @@ methods
                     MOCPSOAlg.lambda = lambda;
                     MOCPSOAlg.c_guide = c_guide;
                     MOCPSOAlg.useDynamicGrouping = useDynamicGrouping;
+                    MOCPSOAlg.useDynamicMutation = useDynamicMutation;
                     previousProblem = PROBLEM.Current();
                     
                     try

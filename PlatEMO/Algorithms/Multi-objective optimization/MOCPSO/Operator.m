@@ -1,6 +1,9 @@
-function [Offspring1,Offspring2,Offspring3] = Operator(Loser1,Loser2,Winner)
+function [Offspring1,Offspring2,Offspring3] = Operator(Loser1,Loser2,Winner,mutationRateMultiplier)
     % The competitive swarm optimizer of LMOCSO
-
+    %
+    % 参数：
+    %   mutationRateMultiplier - 变异率乘数（可选，默认1.0）
+    %
     %------------------------------- Copyright --------------------------------
     % Copyright (c) 2022 BIMK Group. You are free to use the PlatEMO for
     % research purposes. All publications which use this platform or any code
@@ -9,6 +12,11 @@ function [Offspring1,Offspring2,Offspring3] = Operator(Loser1,Loser2,Winner)
     % for evolutionary multi-objective optimization [educational forum], IEEE
     % Computational Intelligence Magazine, 2017, 12(4): 73-87".
     %--------------------------------------------------------------------------
+
+    % 处理可选参数
+    if nargin < 4
+        mutationRateMultiplier = 1.0;
+    end
 
     %% Parameter setting
     Loser1Dec  = Loser1.decs;
@@ -39,9 +47,9 @@ function [Offspring1,Offspring2,Offspring3] = Operator(Loser1,Loser2,Winner)
     WinOffDec = [WinOffDec;WinnerDec];
     WinOffVel = [WinOffVel;WinnerVel];
     
-    Offspring1 = Polynomial_mutation(Problem,Loser1OffDec,Loser1OffVel,N,D);
-    Offspring2 = Polynomial_mutation(Problem,Loser2OffDec,Loser2OffVel,N,D);
-    Offspring3 = Polynomial_mutation(Problem,WinOffDec,WinOffVel,N,D);
+    Offspring1 = Polynomial_mutation(Problem,Loser1OffDec,Loser1OffVel,N,D,mutationRateMultiplier);
+    Offspring2 = Polynomial_mutation(Problem,Loser2OffDec,Loser2OffVel,N,D,mutationRateMultiplier);
+    Offspring3 = Polynomial_mutation(Problem,WinOffDec,WinOffVel,N,D,mutationRateMultiplier);
 end
 
 function [OutVel, OutDec] = CV_Func(Loser, Winner,Problem)

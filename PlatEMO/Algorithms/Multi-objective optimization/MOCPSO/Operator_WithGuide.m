@@ -1,4 +1,4 @@
-function [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Loser1, Loser2, Winner, GuideDec, c_guide, Problem)
+function [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Loser1, Loser2, Winner, GuideDec, c_guide, Problem, mutationRateMultiplier)
 % Operator_WithGuide - 带引导粒子的竞争粒子群优化器
 %
 % 在原始MOCPSO的Operator基础上，加入向引导粒子的权重项：
@@ -11,6 +11,7 @@ function [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Loser1, Loser
 %   GuideDec               - 引导粒子的决策变量 (1 x D)
 %   c_guide                - 引导权重系数
 %   Problem                - 问题对象
+%   mutationRateMultiplier - 变异率乘数（可选，默认1.0）
 %
 % 输出：
 %   Offspring1, Offspring2, Offspring3 - 三组子代粒子
@@ -23,6 +24,11 @@ function [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Loser1, Loser
 % for evolutionary multi-objective optimization [educational forum], IEEE
 % Computational Intelligence Magazine, 2017, 12(4): 73-87".
 %--------------------------------------------------------------------------
+
+    % 处理可选参数
+    if nargin < 7
+        mutationRateMultiplier = 1.0;
+    end
 
     %% Parameter setting
     Loser1Dec = Loser1.decs;
@@ -58,10 +64,10 @@ function [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Loser1, Loser
     WinOffDec = [WinOffDec; WinnerDec];
     WinOffVel = [WinOffVel; WinnerVel];
     
-    %% 多项式变异
-    Offspring1 = Polynomial_mutation(Problem, Loser1OffDec, Loser1OffVel, N, D);
-    Offspring2 = Polynomial_mutation(Problem, Loser2OffDec, Loser2OffVel, N, D);
-    Offspring3 = Polynomial_mutation(Problem, WinOffDec, WinOffVel, N, D);
+    %% 多项式变异（使用动态变异率）
+    Offspring1 = Polynomial_mutation(Problem, Loser1OffDec, Loser1OffVel, N, D, mutationRateMultiplier);
+    Offspring2 = Polynomial_mutation(Problem, Loser2OffDec, Loser2OffVel, N, D, mutationRateMultiplier);
+    Offspring3 = Polynomial_mutation(Problem, WinOffDec, WinOffVel, N, D, mutationRateMultiplier);
 end
 
 %% CV_Func_WithGuide - 收敛策略（带引导粒子）

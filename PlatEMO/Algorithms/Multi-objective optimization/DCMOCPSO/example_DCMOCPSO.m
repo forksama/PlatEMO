@@ -13,7 +13,7 @@ clear; clc; close all;
 fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 
 % 创建DCMOCPSO算法实例
-% 参数格式：{numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping}
+% 参数格式：{numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation}
 %   numSegments: 将问题分成多少段（子问题数量），默认5
 %   segmentOverlap: 相邻段之间的重叠航点数，默认1
 %   lambda: E_k影响权重（MOCPSO_Ek参数，0~1），默认0.5
@@ -24,7 +24,15 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 %              0-25%迭代:  2:1:1 (强化多样性)
 %              25-75%迭代: 1:1:1 (均衡)
 %              75-100%迭代: 1:1:2 (强化收敛)
-Algorithm = DCMOCPSO('parameter', {2, 1, 0.5, 0.3, true});
+%   useDynamicMutation: 是否使用动态变异率（MOCPSO_Ek参数），默认false
+%     - false: 使用固定变异率 1/D
+%     - true:  使用动态变异率:
+%              0-20%迭代:   2.0x (强化探索)
+%              20-40%迭代:  1.5x
+%              40-60%迭代:  1.0x (标准)
+%              60-80%迭代:  0.75x
+%              80-100%迭代: 0.5x (强化收敛)
+Algorithm = DCMOCPSO('parameter', {2, 1, 0.5, 0.3, true, true});
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
@@ -52,6 +60,11 @@ if Algorithm.useDynamicGrouping
     fprintf('  动态分组: 已启用 (0-25%%:2:1:1, 25-75%%:1:1:1, 75-100%%:1:1:2)\n');
 else
     fprintf('  动态分组: 未启用 (使用原始1:1:1均匀分组)\n');
+end
+if Algorithm.useDynamicMutation
+    fprintf('  动态变异率: 已启用 (0-20%%:2x, 20-40%%:1.5x, 40-60%%:1x, 60-80%%:0.75x, 80-100%%:0.5x)\n');
+else
+    fprintf('  动态变异率: 未启用 (使用固定变异率1/D)\n');
 end
 fprintf('\n');
 

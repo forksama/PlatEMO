@@ -28,19 +28,21 @@ classdef MOCPSO_Ek < ALGORITHM
 % Computational Intelligence Magazine, 2017, 12(4): 73-87".
 %--------------------------------------------------------------------------
 properties
-    lambda = 0.5;           % E_k影响权重 (0~1)
-    c_guide = 0.3;          % 引导粒子权重
-    useDynamicGrouping = false;  % 是否使用动态分组比例
+    lambda = 0.5;                 % E_k影响权重 (0~1)
+    c_guide = 0.3;                % 引导粒子权重
+    useDynamicGrouping = false;   % 是否使用动态分组比例
+    useDynamicMutation = false;   % 是否使用动态变异率
 end
 
 methods
     function main(Algorithm, Problem)
         
         %% 参数设置
-        [lambda, c_guide, useDynamicGrouping] = Algorithm.ParameterSet(0.5, 0.3, false);
+        [lambda, c_guide, useDynamicGrouping, useDynamicMutation] = Algorithm.ParameterSet(0.5, 0.3, false, false);
         Algorithm.lambda = lambda;
         Algorithm.c_guide = c_guide;
         Algorithm.useDynamicGrouping = useDynamicGrouping;
+        Algorithm.useDynamicMutation = useDynamicMutation;
         
         %% Generate random population
         [V,~] = UniformPoint(Problem.N * 100, Problem.M);
@@ -88,7 +90,14 @@ methods
                 if ~isempty(Population)
                     [N,D] = size(Population.decs);
                     PopVel = Population.adds(zeros(N,D));
-                    Offspring = Polynomial_mutation(Problem, Population.decs, PopVel, N/2, D);
+                    % 根据开关决定是否使用动态变异率
+                    if useDynamicMutation
+                        t = Problem.FE / Problem.maxFE;
+                        mutationRateMultiplier = getMutationRateMultiplier(t);
+                    else
+                        mutationRateMultiplier = 1.0;  % 使用固定变异率
+                    end
+                    Offspring = Polynomial_mutation(Problem, Population.decs, PopVel, N/2, D, mutationRateMultiplier);
                     Population = EnvironmentalSelectionWithEk([Population, Offspring], V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
                     
                     if isempty(Population)
@@ -112,9 +121,18 @@ methods
             % ========== 计算适应度并分组 ==========
             FitValue = calFitness(Population.objs);
             
+            % ========== 计算迭代进度 ==========
+            t = Problem.FE / Problem.maxFE;
+            
+            % ========== 根据开关决定是否使用动态变异率 ==========
+            if useDynamicMutation
+                mutationRateMultiplier = getMutationRateMultiplier(t);
+            else
+                mutationRateMultiplier = 1.0;  % 使用固定变异率
+            end
+            
             if useDynamicGrouping
                 % 动态分组比例方案
-                t = Problem.FE / Problem.maxFE;
                 if t < 0.25
                     % 0-25%: 强化多样性 (更多Winner，更多探索)
                     ratio = [2, 1, 1];
@@ -144,11 +162,10 @@ methods
             GuideDec = Population(guideIdx).decs;
             
             % 动态引导权重（前期强，后期弱）
-            t = Problem.FE / Problem.maxFE;
             c_guide_dynamic = c_guide * (1 - t);
             
-            % 更新操作（带引导粒子）
-            [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Population(Loser1), Population(Loser2), Population(Winner), GuideDec, c_guide_dynamic, Problem);
+            % 更新操作（带引导粒子和动态变异率）
+            [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Population(Loser1), Population(Loser2), Population(Winner), GuideDec, c_guide_dynamic, Problem, mutationRateMultiplier);
             
             % 环境选择（使用改进的APD公式）
             Population = EnvironmentalSelectionWithEk([Population, Offspring1, Offspring2, Offspring3], V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
