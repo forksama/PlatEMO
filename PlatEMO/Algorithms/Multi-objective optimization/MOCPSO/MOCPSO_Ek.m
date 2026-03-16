@@ -28,17 +28,19 @@ classdef MOCPSO_Ek < ALGORITHM
 % Computational Intelligence Magazine, 2017, 12(4): 73-87".
 %--------------------------------------------------------------------------
 properties
-    lambda = 0.5;  % E_k影响权重 (0~1)
-    c_guide = 0.3; % 引导粒子权重
+    lambda = 0.5;           % E_k影响权重 (0~1)
+    c_guide = 0.3;          % 引导粒子权重
+    useDynamicGrouping = false;  % 是否使用动态分组比例
 end
 
 methods
     function main(Algorithm, Problem)
         
         %% 参数设置
-        [lambda, c_guide] = Algorithm.ParameterSet(0.5, 0.3);
+        [lambda, c_guide, useDynamicGrouping] = Algorithm.ParameterSet(0.5, 0.3, false);
         Algorithm.lambda = lambda;
         Algorithm.c_guide = c_guide;
+        Algorithm.useDynamicGrouping = useDynamicGrouping;
         
         %% Generate random population
         [V,~] = UniformPoint(Problem.N, Problem.M);
@@ -107,15 +109,35 @@ methods
                 continue;
             end
             
-            % 计算适应度并分组
+            % ========== 计算适应度并分组 ==========
             FitValue = calFitness(Population.objs);
-            Rank = randperm(length(Population), floor((length(Population))/3)*3);
-            Loser1 = Rank(1:end/3);
-            Loser2 = Rank(end/3+1:end/3*2);
-            Winner = Rank(end/3*2+1:end);
-            [Loser1, Loser2] = swapWL(Loser1, Loser2, FitValue);
-            [Winner, Loser1] = swapWL(Winner, Loser1, FitValue);
-            [Loser1, Loser2] = swapWL(Loser1, Loser2, FitValue);
+            
+            if useDynamicGrouping
+                % 动态分组比例方案
+                t = Problem.FE / Problem.maxFE;
+                if t < 0.25
+                    % 0-25%: 强化多样性 (更多Winner，更多探索)
+                    ratio = [2, 1, 1];
+                elseif t < 0.75
+                    % 25-75%: 均衡探索与收敛
+                    ratio = [1, 1, 1];
+                else
+                    % 75-100%: 强化收敛 (更多Loser2，更多收敛学习)
+                    ratio = [1, 1, 2];
+                end
+                
+                % 使用动态分组方法
+                [Winner, Loser1, Loser2] = groupParticlesByRatio(Population, FitValue, ratio);
+            else
+                % 原始分组方法（1:1:1 + swapWL）
+                Rank = randperm(length(Population), floor((length(Population))/3)*3);
+                Loser1 = Rank(1:end/3);
+                Loser2 = Rank(end/3+1:end/3*2);
+                Winner = Rank(end/3*2+1:end);
+                [Loser1, Loser2] = swapWL(Loser1, Loser2, FitValue);
+                [Winner, Loser1] = swapWL(Winner, Loser1, FitValue);
+                [Loser1, Loser2] = swapWL(Loser1, Loser2, FitValue);
+            end
             
             % ========== 新增：计算E_k并选择引导粒子 ==========
             [E_k, ~, ~, ~, guideIdx] = calculateDimensionExploration(Population);

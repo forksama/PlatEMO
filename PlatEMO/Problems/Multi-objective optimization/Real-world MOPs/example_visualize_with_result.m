@@ -22,7 +22,7 @@ Algorithm = MOCPSO_Ek('lambda', 0.3, 'c_guide', 0.3);
 % 如果不指定obstacleMethod，默认使用0
 % 注意：地图面积约为0.09 km²（300m x 300m），所以每平方公里基站数量会按比例计算
 % 预设路径是固定的：起点(45,45,40) -> 终点(268,223,40)，包含6个路径点
-Problem = UAVPathPlanning('N', 10, 'maxFE', 2000, 'parameter', {96, 10, 1, -85, 0});
+Problem = UAVPathPlanning('N', 10, 'maxFE', 3000, 'parameter', {96, 10, 1, -85, 0});
 Algorithm.Solve(Problem);
 
 % 获取最终种群

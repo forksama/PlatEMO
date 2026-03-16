@@ -1108,7 +1108,7 @@ classdef UAVPathPlanning < PROBLEM
             % - 目标3（-coverageRatio）：最差情况覆盖率为0，所以-coverageRatio为0
             %   设置参考点为0.1（比0稍大一点），确保覆盖所有情况
             
-            R = [105, 3, 0.1];
+            R = [105, 8, 0.1];
             
             % 注意：如果HV仍然为0，可能是以下原因：
             % 1. 参考点仍然太小，实际解比参考点还差
