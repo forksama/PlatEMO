@@ -13,10 +13,12 @@ clear; clc; close all;
 fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 
 % 创建DCMOCPSO算法实例
-% 参数格式：{numSegments, segmentOverlap}
+% 参数格式：{numSegments, segmentOverlap, lambda, c_guide}
 %   numSegments: 将问题分成多少段（子问题数量），默认5
 %   segmentOverlap: 相邻段之间的重叠航点数，默认1
-Algorithm = DCMOCPSO('parameter', {2, 1});
+%   lambda: E_k影响权重（MOCPSO_Ek参数，0~1），默认0.3
+%   c_guide: 引导粒子权重（MOCPSO_Ek参数），默认0.3
+Algorithm = DCMOCPSO('parameter', {2, 1, 0.3, 0.3});
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
@@ -25,17 +27,22 @@ Algorithm = DCMOCPSO('parameter', {2, 1});
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 50, 'maxFE', 3000, 'parameter', {96, 10, 4, -85, 0});
+Problem = UAVPathPlanning('N', 50, 'maxFE', 1000, 'parameter', {96, 10, 4, -85, 0});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
 fprintf('  种群大小: %d\n', Problem.N);
 fprintf('  最大函数评估次数: %d\n', Problem.maxFE);
-fprintf('  分治参数: %d段，每段重叠%d个航点\n', 10, 1);
 fprintf('\n');
 
 % 运行优化
 Algorithm.Solve(Problem);
+
+% 打印算法参数（从Algorithm对象中读取）
+fprintf('算法参数：\n');
+fprintf('  分治参数: %d段，每段重叠%d个航点\n', Algorithm.numSegments, Algorithm.segmentOverlap);
+fprintf('  MOCPSO_Ek参数: lambda=%.2f, c_guide=%.2f\n', Algorithm.lambda, Algorithm.c_guide);
+fprintf('\n');
 
 % 获取最终种群
 if ~isempty(Algorithm.result)

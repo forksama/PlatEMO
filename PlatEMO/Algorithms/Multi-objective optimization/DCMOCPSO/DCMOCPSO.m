@@ -1,6 +1,6 @@
 classdef DCMOCPSO < ALGORITHM
 % <multi> <real> <constrained/none>
-% Divide-and-Conquer MOCPSO: 将大问题拆分成多个小问题，使用MOCPSO分别求解
+% Divide-and-Conquer MOCPSO: 将大问题拆分成多个小问题，使用MOCPSO_Ek分别求解
 % 
 % 算法描述：
 % 将UAVPathPlanning问题按照航点序列拆分成多个子问题，每个子问题包含
@@ -10,6 +10,8 @@ classdef DCMOCPSO < ALGORITHM
 % 参数说明：
 % numSegments --- 5 --- 将问题分成多少段（子问题数量）
 % segmentOverlap --- 1 --- 相邻段之间的重叠航点数（用于平滑连接）
+% lambda --- 0.5 --- E_k影响权重（MOCPSO_Ek参数，0~1）
+% c_guide --- 0.3 --- 引导粒子权重（MOCPSO_Ek参数）
 %
 %------------------------------- Copyright --------------------------------
 % Copyright (c) 2022 BIMK Group. You are free to use the PlatEMO for
@@ -20,10 +22,21 @@ classdef DCMOCPSO < ALGORITHM
 % Computational Intelligence Magazine, 2017, 12(4): 73-87".
 %--------------------------------------------------------------------------
 
+properties
+    numSegments = 5;       % 分段数量
+    segmentOverlap = 1;    % 相邻段之间的重叠航点数
+    lambda = 0.5;          % E_k影响权重 (MOCPSO_Ek参数)
+    c_guide = 0.3;         % 引导粒子权重 (MOCPSO_Ek参数)
+end
+
 methods
     function main(Algorithm, Problem)
         %% 参数设置
-        [numSegments, segmentOverlap] = Algorithm.ParameterSet(5, 1);
+        [numSegments, segmentOverlap, lambda, c_guide] = Algorithm.ParameterSet(5, 1, 0.5, 0.3);
+        Algorithm.numSegments = numSegments;
+        Algorithm.segmentOverlap = segmentOverlap;
+        Algorithm.lambda = lambda;
+        Algorithm.c_guide = c_guide;
         
         % 检查问题类型
         if ~isa(Problem, 'UAVPathPlanning')
@@ -93,7 +106,9 @@ methods
                 SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, fullWaypoints, presetPathStart, segmentMaxFE);
                 SubProblem.FE = 0;
                 
-                MOCPSOAlg = MOCPSO();
+                MOCPSOAlg = MOCPSO_Ek();
+                MOCPSOAlg.lambda = lambda;
+                MOCPSOAlg.c_guide = c_guide;
                 previousProblem = PROBLEM.Current();
                 
                 try
@@ -168,7 +183,9 @@ methods
                     SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, prevFullWaypoints, fixedStartPoint, segmentMaxFEPerPath);
                     SubProblem.FE = 0;
                     
-                    MOCPSOAlg = MOCPSO();
+                    MOCPSOAlg = MOCPSO_Ek();
+                    MOCPSOAlg.lambda = lambda;
+                    MOCPSOAlg.c_guide = c_guide;
                     previousProblem = PROBLEM.Current();
                     
                     try
