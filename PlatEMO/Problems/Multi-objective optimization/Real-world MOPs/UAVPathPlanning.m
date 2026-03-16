@@ -1543,10 +1543,12 @@ classdef UAVPathPlanning < PROBLEM
             obj.numBS = size(baseStations, 1);
         end
         
-        %% 获取两点之间的障碍物
+        %% 获取两点之间的障碍物（优化版：使用Bresenham算法，O(n)复杂度）
         function relevantObstacles = getObstaclesBetweenPoints(obj, point1, point2)
             % 筛选出与线段（point1到point2）相交的障碍物
-            % 只返回UAV与基站之间的建筑物，而非所有建筑物
+            % 优化策略：使用Bresenham算法只遍历连线经过的网格单元，而非整个矩形包围盒
+            % 时间复杂度从 O(gridX*gridY) 降到 O(max(|Δx|, |Δy|)/gridSize)
+            %
             % point1, point2: 1x3向量 [x, y, z]
             % relevantObstacles: N_relevant x 5，只包含与线段相交的障碍物
             
@@ -1558,43 +1560,129 @@ classdef UAVPathPlanning < PROBLEM
             
             relevantObstacles = [];
             
-            % 使用二维数组结构进行快速查询
+            % === 优化：使用Bresenham算法获取连线经过的网格单元 ===
+            % 只遍历连线直接经过的网格单元，避免检查矩形包围盒内的所有单元
+            gridCells = obj.getGridCellsAlongLine(point1, point2);
+            
+            % 遍历这些网格单元（数量远少于矩形包围盒内的所有单元）
+            for i = 1:size(gridCells, 1)
+                x = gridCells(i, 1);
+                y = gridCells(i, 2);
+                
+                obs = obj.obstacles(x, y, :);
+                obs = obs(:)';  % 转换为行向量
+                
+                x_min = obs(1);
+                y_min = obs(2);
+                x_max = obs(3);
+                y_max = obs(4);
+                
+                % 快速排除：如果线段的bounding box与障碍物的bounding box不相交，跳过
+                if seg_x_max < x_min || seg_x_min > x_max || ...
+                   seg_y_max < y_min || seg_y_min > y_max
+                    continue;
+                end
+                
+                % 检查线段是否与障碍物的水平投影相交
+                if obj.segmentIntersectsRectangleFast(point1(1:2), point2(1:2), ...
+                                                      [x_min, y_min], [x_max, y_max])
+                    % 如果相交，添加到相关障碍物列表
+                    relevantObstacles = [relevantObstacles; obs];
+                end
+            end
+        end
+        
+        %% 使用Bresenham算法获取连线经过的网格单元（O(n)复杂度）
+        function gridCells = getGridCellsAlongLine(obj, point1, point2)
+            % getGridCellsAlongLine - 使用Bresenham算法获取连线经过的网格单元
+            %
+            % 时间复杂度：O(max(|Δx|, |Δy|)/gridSize)，远小于遍历整个矩形的O(gridX*gridY)
+            %
+            % 输入：
+            %   point1, point2: 1x3向量 [x, y, z]
+            %
+            % 输出：
+            %   gridCells: N x 2 矩阵，每行是一个网格单元的索引 [x_idx, y_idx]
+            
             gridX = obj.obstacleGridSize(1);
             gridY = obj.obstacleGridSize(2);
             
-            % 根据线段bounding box确定需要检查的网格范围
-            % 对于默认方法：x坐标范围是20*(x-0.5)到20*x
-            % 计算哪些网格单元可能与线段相交
-            x_start = max(1, floor((seg_x_min - 10) / 20) + 1);
-            x_end = min(gridX, ceil(seg_x_max / 20));
-            y_start = max(1, floor((seg_y_min - 10) / 20) + 1);
-            y_end = min(gridY, ceil(seg_y_max / 20));
+            % 将世界坐标转换为网格坐标
+            % 网格坐标公式：x_idx = floor((x - 10) / 20) + 1
+            x1_grid = floor((point1(1) - 10) / 20) + 1;
+            y1_grid = floor((point1(2) - 10) / 20) + 1;
+            x2_grid = floor((point2(1) - 10) / 20) + 1;
+            y2_grid = floor((point2(2) - 10) / 20) + 1;
             
-            % 只遍历可能相交的网格单元
-            for x = x_start:x_end
-                for y = y_start:y_end
-                    obs = obj.obstacles(x, y, :);
-                    obs = obs(:)';  % 转换为行向量
+            % 限制在网格范围内
+            x1_grid = max(1, min(gridX, x1_grid));
+            y1_grid = max(1, min(gridY, y1_grid));
+            x2_grid = max(1, min(gridX, x2_grid));
+            y2_grid = max(1, min(gridY, y2_grid));
+            
+            % Bresenham 直线算法（3D Bresenham for 2D grid）
+            dx = abs(x2_grid - x1_grid);
+            dy = abs(y2_grid - y1_grid);
+            
+            % 方向
+            sx = sign(x2_grid - x1_grid);
+            sy = sign(y2_grid - y1_grid);
+            if sx == 0, sx = 1; end
+            if sy == 0, sy = 1; end
+            
+            % 初始化结果
+            gridCells = [];
+            
+            % 当前位置
+            x = x1_grid;
+            y = y1_grid;
+            
+            if dx > dy
+                % x方向为主导方向
+                error_term = dx / 2;
+                for i = 1:(dx + 1)
+                    % 添加当前网格单元
+                    gridCells = [gridCells; x, y];
                     
-                    x_min = obs(1);
-                    y_min = obs(2);
-                    x_max = obs(3);
-                    y_max = obs(4);
-                    
-                    % 快速排除：如果线段的bounding box与障碍物的bounding box不相交，跳过
-                    if seg_x_max < x_min || seg_x_min > x_max || ...
-                       seg_y_max < y_min || seg_y_min > y_max
-                        continue;
+                    if x == x2_grid
+                        break;
                     end
                     
-                    % 检查线段是否与障碍物的水平投影相交
-                    if obj.segmentIntersectsRectangleFast(point1(1:2), point2(1:2), ...
-                                                          [x_min, y_min], [x_max, y_max])
-                        % 如果相交，添加到相关障碍物列表
-                        relevantObstacles = [relevantObstacles; obs];
+                    % 更新误差项
+                    error_term = error_term - dy;
+                    
+                    if error_term < 0
+                        y = y + sy;
+                        error_term = error_term + dx;
                     end
+                    
+                    x = x + sx;
+                end
+            else
+                % y方向为主导方向
+                error_term = dy / 2;
+                for i = 1:(dy + 1)
+                    % 添加当前网格单元
+                    gridCells = [gridCells; x, y];
+                    
+                    if y == y2_grid
+                        break;
+                    end
+                    
+                    % 更新误差项
+                    error_term = error_term - dx;
+                    
+                    if error_term < 0
+                        x = x + sx;
+                        error_term = error_term + dy;
+                    end
+                    
+                    y = y + sy;
                 end
             end
+            
+            % 去重（虽然Bresenham理论上不会重复，但为保险起见）
+            gridCells = unique(gridCells, 'rows');
         end
         
         %% 检查航点是否在建筑物中
