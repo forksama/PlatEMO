@@ -38,6 +38,8 @@ classdef UAVPathPlanning < PROBLEM
         baseStations;    % 基站位置（numBS x 3，包含x, y, z坐标）
         obstacles;       % 障碍物信息（二维数组：gridX x gridY x 5，obstacles(x, y, :) = [x_min, y_min, x_max, y_max, height]）
         obstacleGridSize; % 障碍物网格大小 [gridX, gridY]
+        buildingSpacing;  % 网格间距（米）= 建筑物边长 + 街道宽度
+        mapOrigin;        % 地图原点 [map_x_min, map_y_min]
         velocity;        % 无人机最大速度（m/s）
         TTT;             % 时间间隔（s）
         numBS;           % 基站数量
@@ -129,7 +131,7 @@ classdef UAVPathPlanning < PROBLEM
                 end
             end
             
-            % 固定使用α=0.3, β=500, γ=40
+            % 固定使用α=0.3265, β=204.08, γ=40
             alpha = 0.3265;  % 城市密度比
             beta = 204.08;   % 建筑密度（栋/km²）
             gamma = 40;   % 瑞利分布参数（m）
@@ -1219,11 +1221,14 @@ classdef UAVPathPlanning < PROBLEM
                 % 新方法：基于城市密度比α、建筑密度β和瑞利分布参数γ
                 % 使用obj.alpha, obj.beta, obj.gamma参数
                 
-                % 获取地图边界（默认0-1000米）
+                % 获取地图边界（默认0-500米）
                 map_x_min = 0;
                 map_x_max = 500;
                 map_y_min = 0;
                 map_y_max = 500;
+                
+                % 存储地图原点（用于世界坐标到网格坐标的转换）
+                obj.mapOrigin = [map_x_min, map_y_min];
                 
                 % 计算地图面积（平方公里）
                 map_width = map_x_max - map_x_min;   % 米
@@ -1243,6 +1248,9 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 计算网格大小（建筑物间距 = W + S）
                 buildingSpacing = W + S;  % 米
+                
+                % 存储网格间距（用于世界坐标到网格坐标的转换）
+                obj.buildingSpacing = buildingSpacing;
                 
                 % 计算网格尺寸（确保覆盖整个地图）
                 gridX = ceil(map_width / buildingSpacing);
@@ -1607,12 +1615,19 @@ classdef UAVPathPlanning < PROBLEM
             gridX = obj.obstacleGridSize(1);
             gridY = obj.obstacleGridSize(2);
             
+            % 获取网格参数
+            buildingSpacing = obj.buildingSpacing;
+            map_x_min = obj.mapOrigin(1);
+            map_y_min = obj.mapOrigin(2);
+            
             % 将世界坐标转换为网格坐标
-            % 网格坐标公式：x_idx = floor((x - 10) / 20) + 1
-            x1_grid = floor((point1(1) - 10) / 20) + 1;
-            y1_grid = floor((point1(2) - 10) / 20) + 1;
-            x2_grid = floor((point2(1) - 10) / 20) + 1;
-            y2_grid = floor((point2(2) - 10) / 20) + 1;
+            % 网格中心公式：center_x = map_x_min + (x_idx - 0.5) * buildingSpacing
+            % 网格范围：[(x_idx-1)*buildingSpacing, x_idx*buildingSpacing]
+            % 反向公式：x_idx = ceil((world_x - map_x_min) / buildingSpacing)
+            x1_grid = ceil((point1(1) - map_x_min) / buildingSpacing);
+            y1_grid = ceil((point1(2) - map_y_min) / buildingSpacing);
+            x2_grid = ceil((point2(1) - map_x_min) / buildingSpacing);
+            y2_grid = ceil((point2(2) - map_y_min) / buildingSpacing);
             
             % 限制在网格范围内
             x1_grid = max(1, min(gridX, x1_grid));
@@ -1708,8 +1723,12 @@ classdef UAVPathPlanning < PROBLEM
             wp_z = waypoint(3);
             
             % 计算航点所在的网格单元
-            x_idx = max(1, min(gridX, floor((wp_x - 10) / 20) + 1));
-            y_idx = max(1, min(gridY, floor((wp_y - 10) / 20) + 1));
+            % 使用动态网格参数
+            buildingSpacing = obj.buildingSpacing;
+            map_x_min = obj.mapOrigin(1);
+            map_y_min = obj.mapOrigin(2);
+            x_idx = max(1, min(gridX, ceil((wp_x - map_x_min) / buildingSpacing)));
+            y_idx = max(1, min(gridY, ceil((wp_y - map_y_min) / buildingSpacing)));
             
             % 检查航点所在的网格单元及其相邻单元（以防航点在边界附近）
             x_range = max(1, x_idx-1):min(gridX, x_idx+1);
@@ -1860,7 +1879,138 @@ classdef UAVPathPlanning < PROBLEM
             end
         end
         
-        %% 检查连线是否穿过建筑物
+        %% 【统一方法】检查线段与障碍物的相交情况（供checkSegmentIntersectsObstacle和checkLineOfSight使用）
+        function [isBlocked, maxViolation, blockingObstacleIdx] = checkLineIntersectionInternal(obj, point1, point2, mode)
+            %checkLineIntersectionInternal - 统一的线段-障碍物相交检测核心逻辑
+            %
+            %   输入：
+            %       point1, point2 - 1x3向量 [x, y, z]，线段起点和终点
+            %       mode - 工作模式：
+            %              'constraint' - 约束检查模式（计算所有障碍物的最大违反度）
+            %              'los'        - 视距检查模式（遇到第一个阻挡立即返回）
+            %
+            %   输出：
+            %       isBlocked - 是否被任何障碍物阻挡（boolean）
+            %       maxViolation - 最大违反深度（只在'constraint'模式下有意义）
+            %       blockingObstacleIdx - 第一个阻挡障碍物的索引（只在'los'模式下有意义）
+            %
+            %   优化特点：
+            %       - 两种模式共享相同的核心几何计算逻辑
+            %       - 'los'模式支持早停，遇到第一个阻挡立即返回
+            %       - 避免代码重复，便于维护
+            
+            isBlocked = false;
+            maxViolation = 0;
+            blockingObstacleIdx = [];
+            
+            % 筛选出与线段相交的障碍物
+            relevantObstacles = obj.getObstaclesBetweenPoints(point1, point2);
+            
+            % 如果没有相关障碍物，直接返回
+            if isempty(relevantObstacles)
+                return;
+            end
+            
+            % 遍历相关障碍物
+            for i = 1:size(relevantObstacles, 1)
+                obs = relevantObstacles(i, :);
+                x_min = obs(1);
+                y_min = obs(2);
+                x_max = obs(3);
+                y_max = obs(4);
+                height = obs(5);
+                
+                % 快速检查：线段是否与障碍物的水平投影相交
+                if ~obj.segmentIntersectsRectangleFast(point1(1:2), point2(1:2), ...
+                                                      [x_min, y_min], [x_max, y_max])
+                    continue;  % 水平投影不相交，跳过
+                end
+                
+                % 计算线段在障碍物矩形内的t值范围
+                t_in_rect = [];
+                
+                % 检查起点和终点是否在矩形内
+                if point1(1) >= x_min && point1(1) <= x_max && ...
+                   point1(2) >= y_min && point1(2) <= y_max
+                    t_in_rect = [t_in_rect, 0];
+                end
+                if point2(1) >= x_min && point2(1) <= x_max && ...
+                   point2(2) >= y_min && point2(2) <= y_max
+                    t_in_rect = [t_in_rect, 1];
+                end
+                
+                % 检查与四条边的交点
+                if abs(point2(1) - point1(1)) > 1e-10
+                    % 左边界
+                    t = (x_min - point1(1)) / (point2(1) - point1(1));
+                    if t > 0 && t < 1
+                        y_at_t = point1(2) + t * (point2(2) - point1(2));
+                        if y_at_t >= y_min && y_at_t <= y_max
+                            t_in_rect = [t_in_rect, t];
+                        end
+                    end
+                    % 右边界
+                    t = (x_max - point1(1)) / (point2(1) - point1(1));
+                    if t > 0 && t < 1
+                        y_at_t = point1(2) + t * (point2(2) - point1(2));
+                        if y_at_t >= y_min && y_at_t <= y_max
+                            t_in_rect = [t_in_rect, t];
+                        end
+                    end
+                end
+                
+                if abs(point2(2) - point1(2)) > 1e-10
+                    % 下边界
+                    t = (y_min - point1(2)) / (point2(2) - point1(2));
+                    if t > 0 && t < 1
+                        x_at_t = point1(1) + t * (point2(1) - point1(1));
+                        if x_at_t >= x_min && x_at_t <= x_max
+                            t_in_rect = [t_in_rect, t];
+                        end
+                    end
+                    % 上边界
+                    t = (y_max - point1(2)) / (point2(2) - point1(2));
+                    if t > 0 && t < 1
+                        x_at_t = point1(1) + t * (point2(1) - point1(1));
+                        if x_at_t >= x_min && x_at_t <= x_max
+                            t_in_rect = [t_in_rect, t];
+                        end
+                    end
+                end
+                
+                % 计算线段在障碍物区域内的最低高度
+                if ~isempty(t_in_rect)
+                    t_min = max(0, min(t_in_rect));
+                    t_max = min(1, max(t_in_rect));
+                    
+                    z_at_tmin = point1(3) + t_min * (point2(3) - point1(3));
+                    z_at_tmax = point1(3) + t_max * (point2(3) - point1(3));
+                    min_z_in_obstacle = min(z_at_tmin, z_at_tmax);
+                    
+                    % 检查是否被阻挡
+                    if min_z_in_obstacle < height
+                        penetration_depth = height - min_z_in_obstacle;
+                        isBlocked = true;
+                        
+                        switch mode
+                            case 'constraint'
+                                % 约束检查模式：记录最大违反度，继续检查其他障碍物
+                                maxViolation = max(maxViolation, penetration_depth);
+                                
+                            case 'los'
+                                % 视距检查模式：立即返回（早停优化）
+                                blockingObstacleIdx = i;
+                                return;
+                                
+                            otherwise
+                                error('Unknown mode: %s. Use ''constraint'' or ''los''.', mode);
+                        end
+                    end
+                end
+            end
+        end
+        
+        %% 检查连线是否穿过建筑物（重构为调用统一方法）
         function violation = checkSegmentIntersectsObstacle(obj, point1, point2)
             %checkSegmentIntersectsObstacle - 检查连线是否穿过建筑物
             %
@@ -1870,10 +2020,27 @@ classdef UAVPathPlanning < PROBLEM
             %       violation - 约束违反度
             %                  如果连线不穿过建筑物，violation = 0（满足约束）
             %                  如果连线穿过建筑物，violation > 0（违反约束）
+            %
+            %   实现：调用统一的内部方法 checkLineIntersectionInternal
             
-            violation = 0;
+            [~, violation, ~] = obj.checkLineIntersectionInternal(point1, point2, 'constraint');
+        end
+        
+        %% 检查视距（Line of Sight）- 重构为调用统一方法
+        function hasLOS = checkLineOfSight(obj, point1, point2)
+            %checkLineOfSight - 检查两点之间是否有视距
+            %
+            %   输入：
+            %       point1, point2 - 1x3向量 [x, y, z]
+            %   输出：
+            %       hasLOS - true表示有视距，false表示被阻挡
+            %
+            %   实现：调用统一的内部方法 checkLineIntersectionInternal
+            %         使用'los'模式支持早停优化
             
-            % 先筛选出与线段相交的障碍物
+            [isBlocked, ~, ~] = obj.checkLineIntersectionInternal(point1, point2, 'los');
+            hasLOS = ~isBlocked;
+        end
             relevantObstacles = obj.getObstaclesBetweenPoints(point1, point2);
             
             % 如果没有相关障碍物，直接返回0（满足约束）
@@ -1961,111 +2128,6 @@ classdef UAVPathPlanning < PROBLEM
                             penetration_depth = height - min_z_in_obstacle;
                             violation = max(violation, penetration_depth);
                         end
-                    end
-                end
-            end
-        end
-        
-        %% 检查视距（Line of Sight）- 优化版本
-        function hasLOS = checkLineOfSight(obj, point1, point2)
-            % 检查两点之间是否有视距（是否被障碍物阻挡）
-            % point1, point2: 1x3向量 [x, y, z]
-            % hasLOS: true表示有视距，false表示被障碍物阻挡
-            % 
-            % 优化策略：
-            % 1. 只检查UAV与基站之间的建筑物（与线段相交的障碍物）
-            % 2. 简化计算：只检查线段在障碍物区域内的最低高度
-            
-            hasLOS = true;
-            
-            % 先筛选出与线段相交的障碍物（只检查UAV与基站之间的建筑物）
-            relevantObstacles = obj.getObstaclesBetweenPoints(point1, point2);
-            
-            % 如果没有相关障碍物，直接返回true
-            if isempty(relevantObstacles)
-                return;
-            end
-            
-            % 只遍历与线段相交的障碍物
-            for i = 1:size(relevantObstacles, 1)
-                obs = relevantObstacles(i, :);
-                x_min = obs(1);
-                y_min = obs(2);
-                x_max = obs(3);
-                y_max = obs(4);
-                height = obs(5);
-                
-                % 如果水平投影相交，检查高度是否被阻挡
-                % 简化：计算线段在障碍物矩形内的最低高度
-                % 使用参数方程：P(t) = point1 + t*(point2 - point1), t in [0,1]
-                
-                % 找到线段在矩形内的t值范围
-                t_in_rect = [];
-                
-                % 检查起点和终点是否在矩形内
-                if point1(1) >= x_min && point1(1) <= x_max && ...
-                   point1(2) >= y_min && point1(2) <= y_max
-                    t_in_rect = [t_in_rect, 0];
-                end
-                if point2(1) >= x_min && point2(1) <= x_max && ...
-                   point2(2) >= y_min && point2(2) <= y_max
-                    t_in_rect = [t_in_rect, 1];
-                end
-                
-                % 检查与四条边的交点
-                if abs(point2(1) - point1(1)) > 1e-10
-                    % 左边界
-                    t = (x_min - point1(1)) / (point2(1) - point1(1));
-                    if t > 0 && t < 1
-                        y_at_t = point1(2) + t * (point2(2) - point1(2));
-                        if y_at_t >= y_min && y_at_t <= y_max
-                            t_in_rect = [t_in_rect, t];
-                        end
-                    end
-                    % 右边界
-                    t = (x_max - point1(1)) / (point2(1) - point1(1));
-                    if t > 0 && t < 1
-                        y_at_t = point1(2) + t * (point2(2) - point1(2));
-                        if y_at_t >= y_min && y_at_t <= y_max
-                            t_in_rect = [t_in_rect, t];
-                        end
-                    end
-                end
-                
-                if abs(point2(2) - point1(2)) > 1e-10
-                    % 下边界
-                    t = (y_min - point1(2)) / (point2(2) - point1(2));
-                    if t > 0 && t < 1
-                        x_at_t = point1(1) + t * (point2(1) - point1(1));
-                        if x_at_t >= x_min && x_at_t <= x_max
-                            t_in_rect = [t_in_rect, t];
-                        end
-                    end
-                    % 上边界
-                    t = (y_max - point1(2)) / (point2(2) - point1(2));
-                    if t > 0 && t < 1
-                        x_at_t = point1(1) + t * (point2(1) - point1(1));
-                        if x_at_t >= x_min && x_at_t <= x_max
-                            t_in_rect = [t_in_rect, t];
-                        end
-                    end
-                end
-                
-                % 计算线段在障碍物区域内的最低高度
-                if ~isempty(t_in_rect)
-                    % 找到t值范围
-                    t_min = max(0, min(t_in_rect));
-                    t_max = min(1, max(t_in_rect));
-                    
-                    % 计算该范围内的最低z坐标（线性插值，最低点在端点）
-                    z_at_tmin = point1(3) + t_min * (point2(3) - point1(3));
-                    z_at_tmax = point1(3) + t_max * (point2(3) - point1(3));
-                    min_z_in_obstacle = min(z_at_tmin, z_at_tmax);
-                    
-                    % 如果最低高度低于障碍物高度，则被阻挡
-                    if min_z_in_obstacle < height
-                        hasLOS = false;
-                        return;
                     end
                 end
             end
