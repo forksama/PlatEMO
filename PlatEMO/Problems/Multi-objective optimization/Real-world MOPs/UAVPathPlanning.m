@@ -44,6 +44,7 @@ classdef UAVPathPlanning < PROBLEM
         TTT;             % 时间间隔（s）
         numBS;           % 基站数量
         switchThreshold; % 切换阈值（dBm）
+        P_tx;            % 无人机发射功率（dBm）
         obstacleMethod;  % 障碍物与预设路径生成方法（固定为0，基于αβγ的方法）
         alpha;           % 城市密度比（建筑总面积与土地总面积的比值，0.1~0.5）
         beta;            % 建筑密度（单位土地面积内的建筑物数量，300~750 栋/km²）
@@ -92,12 +93,13 @@ classdef UAVPathPlanning < PROBLEM
             userUpper = obj.upper;
             
             % 获取参数（使用ParameterSet获取，如果obj.parameter被指定则使用，否则使用默认值）
-            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
+            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx}
             %   bsPerKm2: 每平方公里的基站数量
             %   velocity: 无人机最大速度（m/s）
             %   TTT: 时间间隔（s）
             %   switchThreshold: 切换阈值（dBm）
             %   obstacleMethod: 障碍物生成方法（固定为0，基于αβγ的方法，固定α=0.3, β=500, γ=40）
+            %   P_tx: 无人机发射功率（dBm，默认为30dBm）
             % 注意：不再需要numWaypoints参数，航点数量将自动计算
             if isempty(obj.parameter)
                 bsPerKm2 = 10;  % 默认每平方公里10个基站
@@ -105,6 +107,7 @@ classdef UAVPathPlanning < PROBLEM
                 TTT = 1;
                 switchThreshold = -80;
                 obstacleMethod = 0;  % 0 = 基于αβγ的新方法
+                P_tx = 30;  % 默认发射功率30dBm
             else
                 params = obj.parameter;
                 if iscell(params) && length(params) >= 4
@@ -122,12 +125,18 @@ classdef UAVPathPlanning < PROBLEM
                     else
                         obstacleMethod = 0;
                     end
+                    if length(params) >= 6
+                        P_tx = params{6};  % 无人机发射功率
+                    else
+                        P_tx = 30;  % 默认发射功率30dBm
+                    end
                 else
                     bsPerKm2 = 10;  % 默认每平方公里10个基站
                     velocity = 10;
                     TTT = 1;
                     switchThreshold = -80;
                     obstacleMethod = 0;
+                    P_tx = 30;  % 默认发射功率30dBm
                 end
             end
             
@@ -140,6 +149,7 @@ classdef UAVPathPlanning < PROBLEM
             obj.TTT = TTT;
             obj.switchThreshold = switchThreshold;
             obj.obstacleMethod = obstacleMethod;
+            obj.P_tx = P_tx;  % 保存无人机发射功率
             
             % 覆盖半径不再使用固定值：覆盖半径取每个航点当前高度z（r = waypoint(3)）
             % 因此这里不再设置obj.coverageRadius
@@ -670,6 +680,9 @@ classdef UAVPathPlanning < PROBLEM
                 distances = sqrt(sum((obj.baseStations - repmat(waypoints(j,:), obj.numBS, 1)).^2, 2));
                 
                 % 计算信号强度（考虑视距/非视距）
+                % RSRP = P_tx - PathLoss
+                % P_tx: 无人机发射功率（dBm）
+                % PathLoss: 路径损耗（dB）
                 signalStrengths = zeros(obj.numBS, 1);
                 for k = 1:obj.numBS
                     % 检查是否有视距（LOS）
@@ -678,10 +691,12 @@ classdef UAVPathPlanning < PROBLEM
                     distances(k) = max(distances(k), 0.1);
                     if hasLOS
                         % 视距（LOS）路径损耗模型
-                        signalStrengths(k) = -20*log10(distances(k)) - 61.4;  % dBm
+                        pathLoss = 20*log10(distances(k)) + 61.4;  % dB
+                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
                     else
                         % 非视距（NLOS）路径损耗模型（更大的衰减）
-                        signalStrengths(k) = -40*log10(distances(k)) - 72;  % dBm
+                        pathLoss = 40*log10(distances(k)) + 72;  % dB
+                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
                     end
                 end
                 
@@ -705,6 +720,9 @@ classdef UAVPathPlanning < PROBLEM
                 distances = sqrt(sum((obj.baseStations - repmat(waypoints(j,:), obj.numBS, 1)).^2, 2));
                 
                 % 计算信号强度（考虑视距/非视距）
+                % RSRP = P_tx - PathLoss
+                % P_tx: 无人机发射功率（dBm）
+                % PathLoss: 路径损耗（dB）
                 signalStrengths = zeros(obj.numBS, 1);
                 for k = 1:obj.numBS
                     % 检查是否有视距（LOS）
@@ -713,10 +731,12 @@ classdef UAVPathPlanning < PROBLEM
                     distances(k) = max(distances(k), 0.1);
                     if hasLOS
                         % 视距（LOS）路径损耗模型
-                        signalStrengths(k) = -20*log10(distances(k)) - 61.4;  % dBm
+                        pathLoss = 20*log10(distances(k)) + 61.4;  % dB
+                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
                     else
                         % 非视距（NLOS）路径损耗模型（更大的衰减）
-                        signalStrengths(k) = -40*log10(distances(k)) - 72;  % dBm
+                        pathLoss = 40*log10(distances(k)) + 72;  % dB
+                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
                     end
                 end
                 
