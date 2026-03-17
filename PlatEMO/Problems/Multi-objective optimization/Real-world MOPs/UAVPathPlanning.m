@@ -155,24 +155,43 @@ classdef UAVPathPlanning < PROBLEM
             file = fullfile(fileparts(mfilename('fullpath')), file);
             
             if exist(file, 'file') == 2
-                % 加载数据文件（尝试加载obstacleGridSize和xyBound，如果不存在也不会报错）
+                % 加载数据文件（尝试加载obstacleGridSize、xyBound、buildingSpacing、mapOrigin，如果不存在也不会报错）
                 try
-                    load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'xyBound');
+                    load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'xyBound', 'buildingSpacing', 'mapOrigin');
                     if exist('obstacleGridSize', 'var') && ~isempty(obstacleGridSize)
                         obj.obstacleGridSize = obstacleGridSize;
                     end
                     if exist('xyBound', 'var') && ~isempty(xyBound)
                         obj.xyBound = xyBound;
                     end
+                    if exist('buildingSpacing', 'var') && ~isempty(buildingSpacing)
+                        obj.buildingSpacing = buildingSpacing;
+                    end
+                    if exist('mapOrigin', 'var') && ~isempty(mapOrigin)
+                        obj.mapOrigin = mapOrigin;
+                    end
                 catch
                     % 如果某些变量不存在，尝试加载基本变量
                     try
-                        load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
+                        load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'buildingSpacing', 'mapOrigin');
                         if exist('obstacleGridSize', 'var') && ~isempty(obstacleGridSize)
                             obj.obstacleGridSize = obstacleGridSize;
                         end
+                        if exist('buildingSpacing', 'var') && ~isempty(buildingSpacing)
+                            obj.buildingSpacing = buildingSpacing;
+                        end
+                        if exist('mapOrigin', 'var') && ~isempty(mapOrigin)
+                            obj.mapOrigin = mapOrigin;
+                        end
                     catch
-                        load(file, 'presetPath', 'baseStations', 'obstacles');
+                        try
+                            load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize');
+                            if exist('obstacleGridSize', 'var') && ~isempty(obstacleGridSize)
+                                obj.obstacleGridSize = obstacleGridSize;
+                            end
+                        catch
+                            load(file, 'presetPath', 'baseStations', 'obstacles');
+                        end
                     end
                 end
                 
@@ -188,12 +207,22 @@ classdef UAVPathPlanning < PROBLEM
                     obstacles = obj.generateObstacles(obstacleMethod);
                     baseStations = obj.generateBaseStationsUniform(bsPerKm2, obstacles);
                     obstacleGridSize = obj.obstacleGridSize;
-                    save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', '-append');
+                    buildingSpacing = obj.buildingSpacing;
+                    mapOrigin = obj.mapOrigin;
+                    save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'buildingSpacing', 'mapOrigin', '-append');
                 else
                     % 新格式：如果obstacleGridSize未加载，从obstacles维度推断
                     if isempty(obj.obstacleGridSize)
                         obj.obstacleGridSize = [size(obstacles, 1), size(obstacles, 2)];
                     end
+                    
+                    % 【修复】加载障碍物后，初始化mapOrigin和buildingSpacing
+                    % 这些参数在getGridCellsAlongLine等方法中需要使用
+                    % 根据α、β参数计算建筑物网格参数
+                    W = 1000 * sqrt(obj.alpha / obj.beta);  % 建筑物边长（米）
+                    S = 1000 / sqrt(obj.beta) - W;          % 街道宽度（米）
+                    obj.buildingSpacing = W + S;             % 网格间距（米）
+                    obj.mapOrigin = [0, 0];                  % 地图原点（默认）
                 end
                 
                 % 如果xyBound未加载，根据当前的presetPath生成xyBound
@@ -215,10 +244,12 @@ classdef UAVPathPlanning < PROBLEM
                 % 在建筑物顶端生成基站位置（基于每平方公里基站数量）
                 baseStations = obj.generateBaseStationsUniform(bsPerKm2, obstacles);
                 
-                % 保存数据（包括网格大小和xyBound）
+                % 保存数据（包括网格大小、xyBound、buildingSpacing、mapOrigin）
                 obstacleGridSize = obj.obstacleGridSize;
                 xyBound = obj.xyBound;
-                save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'xyBound');
+                buildingSpacing = obj.buildingSpacing;
+                mapOrigin = obj.mapOrigin;
+                save(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'xyBound', 'buildingSpacing', 'mapOrigin');
             end
             
             obj.obstacles = obstacles;
@@ -2040,97 +2071,6 @@ classdef UAVPathPlanning < PROBLEM
             
             [isBlocked, ~, ~] = obj.checkLineIntersectionInternal(point1, point2, 'los');
             hasLOS = ~isBlocked;
-        end
-            relevantObstacles = obj.getObstaclesBetweenPoints(point1, point2);
-            
-            % 如果没有相关障碍物，直接返回0（满足约束）
-            if isempty(relevantObstacles)
-                return;
-            end
-            
-            % 检查线段是否与任何障碍物相交
-            for i = 1:size(relevantObstacles, 1)
-                obs = relevantObstacles(i, :);
-                x_min = obs(1);
-                y_min = obs(2);
-                x_max = obs(3);
-                y_max = obs(4);
-                height = obs(5);
-                
-                % 检查线段是否与障碍物的水平投影相交
-                if obj.segmentIntersectsRectangleFast(point1(1:2), point2(1:2), ...
-                                                      [x_min, y_min], [x_max, y_max])
-                    % 如果水平投影相交，检查高度是否被阻挡
-                    % 使用与checkLineOfSight相同的逻辑
-                    t_in_rect = [];
-                    
-                    % 检查起点和终点是否在矩形内
-                    if point1(1) >= x_min && point1(1) <= x_max && ...
-                       point1(2) >= y_min && point1(2) <= y_max
-                        t_in_rect = [t_in_rect, 0];
-                    end
-                    if point2(1) >= x_min && point2(1) <= x_max && ...
-                       point2(2) >= y_min && point2(2) <= y_max
-                        t_in_rect = [t_in_rect, 1];
-                    end
-                    
-                    % 检查与四条边的交点
-                    if abs(point2(1) - point1(1)) > 1e-10
-                        % 左边界
-                        t = (x_min - point1(1)) / (point2(1) - point1(1));
-                        if t > 0 && t < 1
-                            y_at_t = point1(2) + t * (point2(2) - point1(2));
-                            if y_at_t >= y_min && y_at_t <= y_max
-                                t_in_rect = [t_in_rect, t];
-                            end
-                        end
-                        % 右边界
-                        t = (x_max - point1(1)) / (point2(1) - point1(1));
-                        if t > 0 && t < 1
-                            y_at_t = point1(2) + t * (point2(2) - point1(2));
-                            if y_at_t >= y_min && y_at_t <= y_max
-                                t_in_rect = [t_in_rect, t];
-                            end
-                        end
-                    end
-                    
-                    if abs(point2(2) - point1(2)) > 1e-10
-                        % 下边界
-                        t = (y_min - point1(2)) / (point2(2) - point1(2));
-                        if t > 0 && t < 1
-                            x_at_t = point1(1) + t * (point2(1) - point1(1));
-                            if x_at_t >= x_min && x_at_t <= x_max
-                                t_in_rect = [t_in_rect, t];
-                            end
-                        end
-                        % 上边界
-                        t = (y_max - point1(2)) / (point2(2) - point1(2));
-                        if t > 0 && t < 1
-                            x_at_t = point1(1) + t * (point2(1) - point1(1));
-                            if x_at_t >= x_min && x_at_t <= x_max
-                                t_in_rect = [t_in_rect, t];
-                            end
-                        end
-                    end
-                    
-                    % 计算线段在障碍物区域内的最低高度
-                    if ~isempty(t_in_rect)
-                        t_min = max(0, min(t_in_rect));
-                        t_max = min(1, max(t_in_rect));
-                        
-                        z_at_tmin = point1(3) + t_min * (point2(3) - point1(3));
-                        z_at_tmax = point1(3) + t_max * (point2(3) - point1(3));
-                        min_z_in_obstacle = min(z_at_tmin, z_at_tmax);
-                        
-                        % 如果最低高度低于障碍物高度，则穿过建筑物
-                        if min_z_in_obstacle < height
-                            % 计算违反度：线段在建筑物内的最大深度
-                            penetration_depth = height - min_z_in_obstacle;
-                            violation = max(violation, penetration_depth);
-                        end
-                    end
-                end
-            end
         end
         
         %% 检查线段是否与矩形相交（快速版本）
