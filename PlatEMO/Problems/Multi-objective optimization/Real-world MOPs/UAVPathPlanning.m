@@ -308,22 +308,67 @@ classdef UAVPathPlanning < PROBLEM
             if ~isempty(userLower) && isequal(size(userLower), [1, obj.D])
                 obj.lower = userLower;
             else
-                % 默认下界：x, y在0-300（根据预设路径范围），z在30-70米（高度范围，预设路径在40米左右）
+                % 【修正】根据预设路径的实际范围动态计算下界，而不是使用地图边界
+                % 计算预设路径的XY范围
+                preset_x_min = min(obj.presetPath(:, 1));
+                preset_x_max = max(obj.presetPath(:, 1));
+                preset_y_min = min(obj.presetPath(:, 2));
+                preset_y_max = max(obj.presetPath(:, 2));
+                
+                % 添加缓冲区（例如路径范围的20%），但不小于50米
+                buffer_ratio = 0.2;
+                x_buffer = max(50, (preset_x_max - preset_x_min) * buffer_ratio);
+                y_buffer = max(50, (preset_y_max - preset_y_min) * buffer_ratio);
+                
+                x_lower = max(0, preset_x_min - x_buffer);
+                y_lower = max(0, preset_y_min - y_buffer);
+                
+                % 默认下界：基于预设路径范围
                 obj.lower = zeros(1, obj.D);
-                % z坐标的下界设为30米（允许一定的高度变化范围）
-                for i = 3:3:obj.D
-                    obj.lower(i) = 30;
+                for i = 1:3:obj.D  % x坐标（第1, 4, 7, ...列）
+                    obj.lower(i) = x_lower;
+                end
+                for i = 2:3:obj.D  % y坐标（第2, 5, 8, ...列）
+                    obj.lower(i) = y_lower;
+                end
+                for i = 3:3:obj.D  % z坐标（第3, 6, 9, ...列）
+                    obj.lower(i) = 30;  % z在30-70米范围
                 end
             end
             
             if ~isempty(userUpper) && isequal(size(userUpper), [1, obj.D])
                 obj.upper = userUpper;
             else
-                % 默认上界：x, y在0-300（根据预设路径范围），z在30-70米（高度范围，预设路径在40米左右）
-                obj.upper = 500 * ones(1, obj.D);
-                % z坐标的上界设为70米（允许一定的高度变化范围）
-                for i = 3:3:obj.D
-                    obj.upper(i) = 70;
+                % 【修正】根据预设路径的实际范围动态计算上界，而不是使用地图边界
+                % 计算预设路径的XY范围
+                preset_x_min = min(obj.presetPath(:, 1));
+                preset_x_max = max(obj.presetPath(:, 1));
+                preset_y_min = min(obj.presetPath(:, 2));
+                preset_y_max = max(obj.presetPath(:, 2));
+                
+                % 添加缓冲区（例如路径范围的20%），但不小于50米
+                buffer_ratio = 0.2;
+                x_buffer = max(50, (preset_x_max - preset_x_min) * buffer_ratio);
+                y_buffer = max(50, (preset_y_max - preset_y_min) * buffer_ratio);
+                
+                % 获取地图边界（从障碍物生成代码中硬编码的值）
+                % 假设地图是2000×2000（如果不是，用户应该手动传递upper）
+                map_x_max = 2000;
+                map_y_max = 2000;
+                
+                x_upper = min(map_x_max, preset_x_max + x_buffer);
+                y_upper = min(map_y_max, preset_y_max + y_buffer);
+                
+                % 默认上界：基于预设路径范围
+                obj.upper = zeros(1, obj.D);
+                for i = 1:3:obj.D  % x坐标（第1, 4, 7, ...列）
+                    obj.upper(i) = x_upper;
+                end
+                for i = 2:3:obj.D  % y坐标（第2, 5, 8, ...列）
+                    obj.upper(i) = y_upper;
+                end
+                for i = 3:3:obj.D  % z坐标（第3, 6, 9, ...列）
+                    obj.upper(i) = 70;  % z在30-70米范围
                 end
             end
             
@@ -354,9 +399,9 @@ classdef UAVPathPlanning < PROBLEM
             % 基于预设航点生成初始种群
             PopDec = zeros(N, obj.D);
             
-            % 计算扰动范围（初始种群使用更小的扰动，确保满足约束）
-            % 扰动范围设为决策空间范围的1%，即约1米（比原来的5%小很多）
-            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0;
+            % 计算扰动范围（初始种群使用小的扰动，确保初始多样性）
+            % 扰动范围设为决策空间范围的2%，增加初始多样性
+            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0.02;
             
             % 计算最大允许距离（用于确保相邻航点距离约束）
             maxDistance = obj.velocity * obj.TTT;
@@ -1205,20 +1250,6 @@ classdef UAVPathPlanning < PROBLEM
                     0, 265, 0, 295;  % 路径段1：[40,40,40]到[80,40,40]
                     realmax, 125, realmax, 155   % 路径段2：[123,40,40]到[123,150,40]
                 ];
-                
-                % presetPath = [
-                %     40,   40,  40;   % 起点
-                %     168,  40,  40;   % 转折点1
-                %     168,  125, 40;   % 转折点2
-                %     83,   125, 40;   % 转折点3
-                %     83,   208, 40;   % 转折点4
-                %     250,  208, 40    % 终点
-                % ];
-                % 对应的xyBound示例：
-                % obj.xyBound = [
-                %     0, 33, 0, 50;              % 路径段1：[40,40,40]到[168,40,40]
-                %     realmax, 74, realmax, 91   % 路径段2：[168,40,40]到[168,125,40]
-                % ];
             else
                 error('未知的预设路径生成方法: %d', method);
             end
@@ -1272,11 +1303,11 @@ classdef UAVPathPlanning < PROBLEM
                 % 新方法：基于城市密度比α、建筑密度β和瑞利分布参数γ
                 % 使用obj.alpha, obj.beta, obj.gamma参数
                 
-                % 获取地图边界（默认0-500米）
+                % 获取地图边界（默认0-2000米）
                 map_x_min = 0;
-                map_x_max = 500;
+                map_x_max = 2000;
                 map_y_min = 0;
-                map_y_max = 500;
+                map_y_max = 2000;
                 
                 % 存储地图原点（用于世界坐标到网格坐标的转换）
                 obj.mapOrigin = [map_x_min, map_y_min];
