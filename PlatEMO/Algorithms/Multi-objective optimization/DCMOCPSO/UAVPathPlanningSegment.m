@@ -268,8 +268,11 @@ classdef UAVPathPlanningSegment < PROBLEM
                 PopObj(i, 2) = switchCount;
                 
                 % 目标3：最大化路径覆盖率（转换为最小化负的覆盖率）
-                % 只计算当前段对应的预设路径段的覆盖率
-                coverageRatio = obj.calculateSegmentCoverageRatio(currentSegmentWaypoints);
+                % 使用UAVPathPlanning的calculatePathCoverageRatio方法（保持一致性）
+                % 构建完整路径：复制fullWaypoints，更新当前段的位置
+                updatedFullWaypoints = obj.fullWaypoints;
+                updatedFullWaypoints(obj.startIdx:obj.endIdx, :) = currentSegmentWaypoints;
+                coverageRatio = obj.originalProblem.calculatePathCoverageRatio(updatedFullWaypoints, obj.startIdx, obj.endIdx);
                 PopObj(i, 3) = -coverageRatio;  % 取负值，因为要最小化
             end
         end
@@ -311,71 +314,6 @@ classdef UAVPathPlanningSegment < PROBLEM
                 fullObj = obj.originalProblem.CalObj(fullDec);
                 PopObj(i, :) = fullObj;
             end
-        end
-        
-        function coverageRatio = calculateSegmentCoverageRatio(obj, segmentWaypoints)
-            %calculateSegmentCoverageRatio - 计算当前段的路径覆盖率
-            %
-            %   只计算当前段对应的预设路径段的覆盖率
-            %
-            %   输入：
-            %       segmentWaypoints - 当前段的航点（segmentSize x 3）
-            %
-            %   输出：
-            %       coverageRatio - 覆盖率（0~1）
-            
-            % 获取私有属性（通过公共方法）
-            segmentMapping = obj.originalProblem.getWaypointSegmentMapping();
-            presetPath = obj.originalProblem.getPresetPath();
-            
-            % 获取当前段的起始和结束航点索引
-            startWaypointIdx = obj.startIdx;
-            endWaypointIdx = obj.endIdx;
-            
-            % 获取这些航点对应的路径段索引范围
-            segmentIndices = unique(segmentMapping(startWaypointIdx:endWaypointIdx));
-            
-            % 计算总的预设路径段长度
-            totalSegmentLength = 0;
-            for k = 1:length(segmentIndices)
-                segIdx = segmentIndices(k);
-                if segIdx >= 1 && segIdx < size(presetPath, 1)
-                    segmentLength = norm(presetPath(segIdx+1, :) - presetPath(segIdx, :));
-                    totalSegmentLength = totalSegmentLength + segmentLength;
-                end
-            end
-            
-            % 如果总长度为0，返回0覆盖率
-            if totalSegmentLength < 1e-10
-                coverageRatio = 0;
-                return;
-            end
-            
-            % 计算覆盖长度
-            coveredLength = 0;
-            numWaypoints = size(segmentWaypoints, 1);
-            
-            for j = 1:numWaypoints
-                waypointXY = segmentWaypoints(j, 1:2);
-                waypointRadius = segmentWaypoints(j, 3);  % 覆盖半径 = 高度
-                
-                % 遍历当前段对应的所有预设路径段
-                for k = 1:length(segmentIndices)
-                    segIdx = segmentIndices(k);
-                    if segIdx >= 1 && segIdx < size(presetPath, 1)
-                        segmentStartXY = presetPath(segIdx, 1:2);
-                        segmentEndXY = presetPath(segIdx+1, 1:2);
-                        
-                        % 计算圆柱体与该路径段的相交长度
-                        intersectionLength = obj.originalProblem.calculateCylinderSegmentIntersection(...
-                            waypointXY, waypointRadius, segmentStartXY, segmentEndXY);
-                        coveredLength = coveredLength + intersectionLength;
-                    end
-                end
-            end
-            
-            % 覆盖率 = 覆盖长度 / 总路径段长度
-            coverageRatio = min(1.0, coveredLength / totalSegmentLength);
         end
         
         function PopCon = CalCon(obj, PopDec)

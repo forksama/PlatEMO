@@ -190,7 +190,8 @@ methods
                     prevFullWaypoints = AllSolutions{prevIdx};
                     
                     % 提取前一段的终点作为当前段的起点
-                    fixedStartPoint = prevFullWaypoints(startIdx-1, :);
+                    % 修正：使用前一段的最后一个航点（startIdx），而不是startIdx-1
+                    fixedStartPoint = prevFullWaypoints(startIdx, :);
                     
                     fprintf('  为第 %d/%d 条前段路径求解（起点: [%.2f, %.2f, %.2f]）...\n', ...
                         prevIdx, numPrevSolutions, fixedStartPoint(1), fixedStartPoint(2), fixedStartPoint(3));
@@ -253,10 +254,8 @@ methods
                 
                 Problem.FE = originalFE + totalSubFE;
                 
-                % 筛选可行解
                 if ~isempty(CombinedSolutions)
-                    fprintf('段 %d 组合生成 %d 条路径，筛选可行解...\n', segIdx, length(CombinedSolutions));
-                    AllSolutions = DCMOCPSO.extractFeasibleSolutions(CombinedSolutions, Problem);
+                    AllSolutions = CombinedSolutions;
                     
                     % 对可行解进行帕累托前沿筛选
                     if ~isempty(AllSolutions)

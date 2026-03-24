@@ -432,7 +432,8 @@ classdef UAVPathPlanning < PROBLEM
             
             for i = 1:N
                 % 以presetWaypoints为基础，添加小的随机扰动
-                waypoints = obj.presetWaypoints + randn(size(obj.presetWaypoints)) * perturbationRange;
+                % waypoints = obj.presetWaypoints + randn(size(obj.presetWaypoints)) * perturbationRange;
+                waypoints = obj.presetWaypoints;
                 
                 % 限制在边界内（3D坐标：x, y, z）
                 waypoints = max(waypoints, repmat(obj.lower(1:3), size(waypoints, 1), 1));
