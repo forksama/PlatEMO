@@ -181,6 +181,32 @@ methods
             numInfeasible = sum(CV > 0);
             fprintf('迭代 %d (FE=%d/%d): 可行解=%d, 不可行解=%d, 总计=%d, E_k均值=%.4f\n', ...
                 iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population), mean(E_k));
+            
+            % ========== 检查是否是最后一次迭代，如果是则筛选帕累托前沿 ==========
+            % 【关键】必须在NotTerminated之前筛选，因为NotTerminated会保存Population
+            if Problem.FE >= Problem.maxFE
+                fprintf('\n========== 算法即将结束，筛选帕累托前沿 ==========\n');
+                fprintf('迭代结束时种群大小: %d\n', length(Population));
+                
+                % 使用PlatEMO内置的非支配排序
+                [FrontNo, ~] = NDSort(Population.objs, Population.cons, inf);
+                
+                % 只保留第一前沿（FrontNo == 1）
+                ParetoFront = Population(FrontNo == 1);
+                
+                fprintf('帕累托前沿大小: %d\n', length(ParetoFront));
+                
+                % 将帕累托前沿赋值给Population
+                Population = ParetoFront;
+                
+                % 打印帕累托前沿信息
+                CV_final = sum(max(0, Population.cons), 2);
+                numFeasible_final = sum(CV_final == 0);
+                numInfeasible_final = sum(CV_final > 0);
+                fprintf('帕累托前沿: 可行解=%d, 不可行解=%d, 总计=%d\n', ...
+                    numFeasible_final, numInfeasible_final, length(Population));
+                fprintf('=============================================\n\n');
+            end
         end
     end
 end

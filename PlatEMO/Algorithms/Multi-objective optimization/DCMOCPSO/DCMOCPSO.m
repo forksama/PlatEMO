@@ -69,6 +69,7 @@ methods
         
         fprintf('DCMOCPSO: 将%d个航点分成%d段，每段重叠%d个航点\n', ...
             numWaypoints, numSegments, segmentOverlap);
+        fprintf('优化策略：每段单独计算目标函数，最终拼接后计算完整路径目标\n');
         
         %% 计算每段的航点范围
         segmentRanges = DCMOCPSO.calculateSegmentRanges(numWaypoints, numSegments, segmentOverlap);
@@ -159,7 +160,10 @@ methods
                         AllSolutions{i} = currentFullWaypoints;
                     end
                     
-                    fprintf('段 %d 求解完成，生成 %d 条路径\n', segIdx, length(AllSolutions));
+                    % 【新增】对第一段的路径进行帕累托前沿筛选
+                    [AllSolutions, ~] = DCMOCPSO.filterParetoFront(AllSolutions, Problem, segIdx, segmentRanges);
+                    
+                    fprintf('段 %d 求解完成，生成 %d 条路径（帕累托前沿）\n', segIdx, length(AllSolutions));
                 else
                     warning('段 %d 没有找到解', segIdx);
                     AllSolutions = [];
@@ -253,7 +257,13 @@ methods
                 if ~isempty(CombinedSolutions)
                     fprintf('段 %d 组合生成 %d 条路径，筛选可行解...\n', segIdx, length(CombinedSolutions));
                     AllSolutions = DCMOCPSO.extractFeasibleSolutions(CombinedSolutions, Problem);
-                    fprintf('段 %d 求解完成，当前可行解集合包含 %d 条路径\n', segIdx, length(AllSolutions));
+                    
+                    % 对可行解进行帕累托前沿筛选
+                    if ~isempty(AllSolutions)
+                        [AllSolutions, ~] = DCMOCPSO.filterParetoFront(AllSolutions, Problem, segIdx, segmentRanges);
+                    end
+                    
+                    fprintf('段 %d 求解完成，当前解集合包含 %d 条路径（帕累托前沿）\n', segIdx, length(AllSolutions));
                 else
                     warning('段 %d 没有生成任何路径', segIdx);
                     AllSolutions = [];
@@ -293,7 +303,7 @@ methods
             FinalPopulation = FinalPopulationArray;
         end
         
-        % 保存最终结果
+        % 保存最终结果（已经在每段求解后筛选过帕累托前沿）
         try
             Algorithm.NotTerminated(FinalPopulation);
         catch ME
@@ -416,6 +426,74 @@ methods(Static)
             segmentRanges(end, 2) = numWaypoints;
         end
     end
-end
-
+    
+    function [FilteredSolutions, numRemoved] = filterParetoFront(Solutions, Problem, segIdx, segmentRanges)
+        % 对路径解集进行帕累托前沿筛选
+        % 
+        % 输入：
+        %   Solutions - cell数组，每个元素是一条路径（numWaypoints x 3）
+        %   Problem - 问题对象
+        %   segIdx - 段索引（用于打印信息）
+        %   segmentRanges - 段范围矩阵（numSegments x 2）
+        %
+        % 输出：
+        %   FilteredSolutions - 筛选后的路径解集（帕累托前沿）
+        %   numRemoved - 被移除的路径数量
+        %
+        % 注意：只基于已优化的段（1到segIdx段）计算目标函数，不考虑后续未优化的段
+        
+        if isempty(Solutions)
+            FilteredSolutions = Solutions;
+            numRemoved = 0;
+            return;
+        end
+        
+        numBeforeFilter = length(Solutions);
+        fprintf('段 %d 筛选前路径数量: %d\n', segIdx, numBeforeFilter);
+        
+        % 确定已优化的航点范围（从第1个航点到第segIdx段的最后一个航点）
+        if segIdx <= size(segmentRanges, 1)
+            lastOptimizedWaypointIdx = segmentRanges(segIdx, 2);
+        else
+            lastOptimizedWaypointIdx = size(Solutions{1}, 1);
+        end
+        
+        fprintf('段 %d：只考虑前 %d 个航点的目标函数值\n', segIdx, lastOptimizedWaypointIdx);
+        
+        % 手动计算每个解的目标函数值（只基于已优化的部分）
+        numSolutions = length(Solutions);
+        objValues = zeros(numSolutions, 3);  % 3个目标
+        
+        for k = 1:numSolutions
+            fullWaypoints = Solutions{k};
+            % 截取已优化的部分
+            optimizedWaypoints = fullWaypoints(1:lastOptimizedWaypointIdx, :);
+            
+            % 计算三个目标函数值（只基于优化部分）
+            % 目标1：最大化平均信号强度（转换为最小化负的平均信号强度）
+            avgSignal = Problem.calculateAverageSignal(optimizedWaypoints);
+            objValues(k, 1) = -avgSignal;  % 取负值
+            
+            % 目标2：最小化切换次数
+            switchCount = Problem.calculateSwitchCount(optimizedWaypoints);
+            objValues(k, 2) = switchCount;
+            
+            % 目标3：最大化路径覆盖率（转换为最小化负的覆盖率）
+            % 计算已优化部分对应的预设路径段的覆盖率
+            coverageRatio = Problem.calculatePathCoverageRatio(optimizedWaypoints, 1, lastOptimizedWaypointIdx);
+            objValues(k, 3) = -coverageRatio;  % 取负值
+        end
+        
+        % 非支配排序（不考虑约束，因为约束已在extractFeasibleSolutions中处理）
+        [FrontNo, ~] = NDSort(objValues, [], inf);
+        
+        % 只保留帕累托前沿（第一前沿）
+        ParetoIndices = find(FrontNo == 1);
+        FilteredSolutions = Solutions(ParetoIndices);
+        
+        numRemoved = numBeforeFilter - length(FilteredSolutions);
+        fprintf('段 %d 帕累托前沿筛选后: %d 条路径（移除了 %d 条）\n', ...
+            segIdx, length(FilteredSolutions), numRemoved);
+    end
+    end
 end

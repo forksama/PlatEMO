@@ -62,7 +62,11 @@ classdef UAVPathPlanning < PROBLEM
         %% 获取切换阈值（公共方法）
         function threshold = getSwitchThreshold(obj)
             threshold = obj.switchThreshold;
-            
+        end
+        
+        %% 获取无人机发射功率（公共方法）
+        function power = getTransmitPower(obj)
+            power = obj.P_tx;
         end
         
         %% 获取航点到路径段的映射（公共方法）
@@ -80,6 +84,26 @@ classdef UAVPathPlanning < PROBLEM
             end
             
             segmentMapping = obj.waypointSegmentMapping;
+        end
+        
+        %% 获取预设路径（公共方法）
+        function path = getPresetPath(obj)
+            %getPresetPath - 获取预设路径
+            %
+            %   输出：
+            %       path - N_preset x 3矩阵，包含x, y, z坐标
+            
+            path = obj.presetPath;
+        end
+        
+        %% 获取XY平面边界约束（公共方法）
+        function bound = getXYBound(obj)
+            %getXYBound - 获取XY平面边界约束
+            %
+            %   输出：
+            %       bound - (numPresetPoints-1) x 4矩阵，每行包含[kLower, cLower, kUpper, cUpper]
+            
+            bound = obj.xyBound;
         end
         
         %% 默认设置
@@ -401,7 +425,7 @@ classdef UAVPathPlanning < PROBLEM
             
             % 计算扰动范围（初始种群使用小的扰动，确保初始多样性）
             % 扰动范围设为决策空间范围的2%，增加初始多样性
-            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0.02;
+            perturbationRange = (obj.upper(1) - obj.lower(1)) * 0;
             
             % 计算最大允许距离（用于确保相邻航点距离约束）
             maxDistance = obj.velocity * obj.TTT;
@@ -786,35 +810,25 @@ classdef UAVPathPlanning < PROBLEM
                 end
                 
                 % 选择信号最强的基站
-                [maxSignal, currentBS] = max(signalStrengths);
+                [~, bestBS] = max(signalStrengths);
                 
-                % 判断是否需要切换
-                % 切换的定义：
-                % 1. 信号强度低于阈值时才改变基站为信号最强的基站
-                % 2. 一改变基站就算切换
-                % 即：信号强度 < 阈值 → 改变到信号最强的基站，且一旦改变就算切换
-                if j > 1
-                    % 检查信号强度是否低于阈值
-                    if maxSignal < obj.switchThreshold
-                        % 信号强度低于阈值，改变基站为信号最强的基站
-                        if currentBS ~= previousBS
-                            % 基站改变 → 切换
+                % 判断是否需要切换（基于“当前连接基站”的信号强度）
+                % 需求定义：如果当前连接基站的信号 < 阈值，则切换到信号更好的基站（这里取最强基站）
+                if j == 1
+                    % 第一个航点：初始化连接为最强基站
+                    previousBS = bestBS;
+                else
+                    currentConnectedSignal = signalStrengths(previousBS);
+                    if currentConnectedSignal < obj.switchThreshold
+                        % 当前连接基站信号低于阈值，执行切换到最强基站
+                        if bestBS ~= previousBS
                             switchCount = switchCount + 1;
                         end
-                        % 更新连接的基站（改变到信号最强的基站）
-                        previousBS = currentBS;
+                        previousBS = bestBS;
                     else
-                        % 信号强度 >= 阈值，继续连接之前的基站
-                        % 注意：如果信号强度足够，无人机应该继续连接之前的基站
-                        % 但为了保持逻辑一致性，我们仍然更新previousBS为currentBS
-                        % 因为如果信号强度足够，currentBS应该等于previousBS（信号最强的基站）
-                        % 如果currentBS != previousBS，说明信号强度虽然>=阈值，但最强的基站已经改变
-                        % 这种情况下，我们更新previousBS但不计数切换（因为信号强度足够，不需要切换）
-                        previousBS = currentBS;
+                        % 当前连接基站信号满足阈值，保持连接不变
+                        % previousBS 保持不变
                     end
-                else
-                    % 第一个航点，初始化基站连接，不计为切换
-                    previousBS = currentBS;
                 end
             end
         end
@@ -958,7 +972,7 @@ classdef UAVPathPlanning < PROBLEM
         end
         
         %% 计算路径覆盖率
-        function coverageRatio = calculatePathCoverageRatio(obj, waypoints)
+        function coverageRatio = calculatePathCoverageRatio(obj, waypoints, startWaypointIdx, endWaypointIdx)
             %calculatePathCoverageRatio - 计算路径覆盖率
             %
             %   对每个航点，只计算在当前"所属"的预设路径段内的覆盖路径长度。
@@ -967,16 +981,55 @@ classdef UAVPathPlanning < PROBLEM
             %
             %   输入：
             %       waypoints - 航点坐标（numWaypoints x 3）
+            %       startWaypointIdx - （可选）起始航点索引，默认为1
+            %       endWaypointIdx - （可选）结束航点索引，默认为numWaypoints
             %
             %   输出：
             %       coverageRatio - 路径覆盖率（0到1之间）
+            %
+            %   示例：
+            %       coverageRatio = obj.calculatePathCoverageRatio(waypoints)  % 计算整条路径
+            %       coverageRatio = obj.calculatePathCoverageRatio(waypoints, 1, 10)  % 计算前10个航点的覆盖率
             
             numWaypoints = size(waypoints, 1);
+            
+            % 处理可选参数
+            if nargin < 3 || isempty(startWaypointIdx)
+                startWaypointIdx = 1;
+            end
+            if nargin < 4 || isempty(endWaypointIdx)
+                endWaypointIdx = numWaypoints;
+            end
+            
+            % 验证参数
+            if startWaypointIdx < 1 || endWaypointIdx > numWaypoints || startWaypointIdx > endWaypointIdx
+                error('Invalid waypoint index range: [%d, %d] for %d waypoints', ...
+                    startWaypointIdx, endWaypointIdx, numWaypoints);
+            end
+            
             numPresetPoints = size(obj.presetPath, 1);
             numSegments = numPresetPoints - 1;
             
             % 获取航点到路径段的映射
             segmentMapping = obj.getWaypointSegmentMapping();
+            
+            % 获取指定航点范围对应的路径段索引
+            segmentIndices = unique(segmentMapping(startWaypointIdx:endWaypointIdx));
+            
+            % 计算这些路径段的总长度（作为分母）
+            totalSegmentLength = 0;
+            for k = 1:length(segmentIndices)
+                segIdx = segmentIndices(k);
+                if segIdx >= 1 && segIdx < numPresetPoints
+                    segmentLength = norm(obj.presetPath(segIdx+1, :) - obj.presetPath(segIdx, :));
+                    totalSegmentLength = totalSegmentLength + segmentLength;
+                end
+            end
+            
+            if totalSegmentLength < 1e-10
+                coverageRatio = 0;
+                return;
+            end
             
             % 对每个路径段，存储被覆盖的区间
             % segmentCoverage{i} 是一个 N x 2 的矩阵，每行是一个覆盖区间 [start, end]
@@ -986,13 +1039,18 @@ classdef UAVPathPlanning < PROBLEM
                 segmentCoverage{i} = [];
             end
             
-            % 对每个航点，计算其在所属路径段内的覆盖区间
-            for j = 1:numWaypoints
+            % 只处理指定范围内的航点
+            for j = startWaypointIdx:endWaypointIdx
                 waypoint = waypoints(j, :);
                 waypointXY = waypoint(1:2);  % XY坐标
                 
                 % 获取航点对应的路径段索引
                 segmentIdx = segmentMapping(j);
+                
+                % 只处理在segmentIndices范围内的路径段
+                if ~ismember(segmentIdx, segmentIndices)
+                    continue;
+                end
                 
                 % 获取路径段的起点和终点（XY坐标）
                 segmentStartXY = obj.presetPath(segmentIdx, 1:2);
@@ -1006,7 +1064,7 @@ classdef UAVPathPlanning < PROBLEM
                     continue;
                 end
                 
-                % 覆盖半径取航点当前高度z
+                % 覆盖半径取航点当前高度z × √3/3
                 waypointRadius = waypoint(3) * sqrt(3) / 3;
                 
                 % 计算圆柱体与路径段的相交长度
@@ -1065,7 +1123,9 @@ classdef UAVPathPlanning < PROBLEM
             % 对每个路径段，合并重叠的覆盖区间，计算总覆盖长度
             totalCoveredLength = 0;
             
-            for i = 1:numSegments
+            % 只处理指定范围对应的路径段
+            for idx = 1:length(segmentIndices)
+                i = segmentIndices(idx);
                 intervals = segmentCoverage{i};
                 
                 if isempty(intervals)
@@ -1100,9 +1160,9 @@ classdef UAVPathPlanning < PROBLEM
                 totalCoveredLength = totalCoveredLength + segmentCoveredLength;
             end
             
-            % 计算覆盖率
-            if obj.pathLength > 0
-                coverageRatio = totalCoveredLength / obj.pathLength;
+            % 计算覆盖率（使用指定路径段的总长度作为分母）
+            if totalSegmentLength > 0
+                coverageRatio = totalCoveredLength / totalSegmentLength;
             else
                 coverageRatio = 0;
             end

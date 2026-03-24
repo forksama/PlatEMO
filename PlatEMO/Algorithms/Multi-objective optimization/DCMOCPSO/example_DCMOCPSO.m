@@ -8,6 +8,7 @@
 % 4. 可视化路径、基站和障碍物
 
 clear; clc; close all;
+warning('off', 'all');
 
 %% 运行DCMOCPSO优化算法
 fprintf('=== 运行DCMOCPSO优化算法 ===\n');
@@ -32,7 +33,7 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 %              40-60%迭代:  1.0x (标准)
 %              60-80%迭代:  0.75x
 %              80-100%迭代: 0.5x (强化收敛)
-Algorithm = DCMOCPSO('parameter', {2, 1, 0.5, 0.3, true, true});
+Algorithm = DCMOCPSO('parameter', {3, 1, 0.5, 0.3, true, true});
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
@@ -41,7 +42,7 @@ Algorithm = DCMOCPSO('parameter', {2, 1, 0.5, 0.3, true, true});
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 50, 'maxFE', 3000, 'parameter', {96, 10, 4, -85, 0});
+Problem = UAVPathPlanning('N', 5, 'maxFE', 50, 'parameter', {20, 10, 4, -85, 0});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
@@ -131,7 +132,7 @@ if length(finalPopulation) >= 1
     % 加载预设路径、基站和障碍物
     % 文件名格式：UAVPathPlanning-%d-%d.mat（包含障碍物方法和每平方公里基站数量）
     obstacleMethod = 0;  % 与Problem创建时使用的障碍物方法一致
-    bsPerKm2 = 96;    % 与Problem创建时使用的每平方公里基站数量一致
+    bsPerKm2 = 20;    % 与Problem创建时使用的每平方公里基站数量一致
     file = sprintf('UAVPathPlanning-%d-%d.mat', obstacleMethod, bsPerKm2);
     file = fullfile(fileparts(which('UAVPathPlanning')), file);
     
@@ -277,22 +278,22 @@ if length(finalPopulation) >= 1
     scatter3(baseStations(:,1), baseStations(:,2), baseStations(:,3), 200, 'r', '^', ...
             'filled', 'LineWidth', 2, 'DisplayName', '基站（建筑物顶端）');
     
-    % 重新计算切换次数（以及覆盖率）以确保一致性
-    fprintf('重新计算最优解的切换次数（以及覆盖率）...\n');
-    switchCount_obj1 = Problem.calculateSwitchCount(actualPath_obj1);
-    switchCount_obj2 = Problem.calculateSwitchCount(actualPath_obj2);
+    % 直接使用算法结果的目标值（不重新计算）
+    fprintf('使用算法结果的目标值（切换次数和覆盖率）...\n');
+    switchCount_obj1 = PopObj(idx_obj1, 2);
+    switchCount_obj2 = PopObj(idx_obj2, 2);
     if numObjectives >= 3
-        switchCount_obj3 = Problem.calculateSwitchCount(actualPath_obj3);
+        switchCount_obj3 = PopObj(idx_obj3, 2);
+        coverageRatio_obj1 = -PopObj(idx_obj1, 3);  % obj3是负覆盖率，取负得到覆盖率
+        coverageRatio_obj2 = -PopObj(idx_obj2, 3);
+        coverageRatio_obj3 = -PopObj(idx_obj3, 3);
     end
     
-    fprintf('  目标1最优：切换次数=%.1f (原值=%.1f)\n', switchCount_obj1, PopObj(idx_obj1,2));
-    fprintf('  目标2最优：切换次数=%.1f (原值=%.1f)\n', switchCount_obj2, PopObj(idx_obj2,2));
+    fprintf('  目标1最优：切换次数=%.1f\n', switchCount_obj1);
+    fprintf('  目标2最优：切换次数=%.1f\n', switchCount_obj2);
     if numObjectives >= 3
-        coverageRatio_obj1 = Problem.calculatePathCoverageRatio(actualPath_obj1);
-        coverageRatio_obj2 = Problem.calculatePathCoverageRatio(actualPath_obj2);
-        coverageRatio_obj3 = Problem.calculatePathCoverageRatio(actualPath_obj3);
-        fprintf('  目标3最优：切换次数=%.1f (原值=%.1f), 覆盖率=%.2f%% (原值=%.2f%%)\n', ...
-            switchCount_obj3, PopObj(idx_obj3,2), coverageRatio_obj3*100, -PopObj(idx_obj3,3)*100);
+        fprintf('  目标3最优：切换次数=%.1f, 覆盖率=%.2f%%\n', ...
+            switchCount_obj3, coverageRatio_obj3*100);
     end
     
     % 绘制各目标的最优解（3D）
@@ -404,36 +405,36 @@ if length(finalPopulation) >= 1
                 hasLOS = Problem.checkLineOfSight(waypoint, baseStations(bsIdx, :));
                 distances(bsIdx) = max(distances(bsIdx), 0.1);
                 if hasLOS
-                    signalStrengths(bsIdx) = -20*log10(distances(bsIdx)) - 61.4;
+                    % 视距（LOS）路径损耗模型
+                    pathLoss = 20*log10(distances(bsIdx)) + 61.4;  % dB
+                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;  % RSRP (dBm)
                 else
-                    signalStrengths(bsIdx) = -40*log10(distances(bsIdx)) - 72;
+                    % 非视距（NLOS）路径损耗模型
+                    pathLoss = 40*log10(distances(bsIdx)) + 72;  % dB
+                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;  % RSRP (dBm)
                 end
             end
             
-            [maxSignal, currentBS] = max(signalStrengths);
+            [~, bestBS] = max(signalStrengths);
             
             if wpIdx == 1
-                connectedBS(wpIdx) = currentBS;
-                previousBS = currentBS;
+                connectedBS(wpIdx) = bestBS;
+                previousBS = bestBS;
             else
-                if maxSignal < Problem.getSwitchThreshold()
-                    connectedBS(wpIdx) = currentBS;
-                    previousBS = currentBS;
+                currentConnectedSignal = signalStrengths(previousBS);
+                if currentConnectedSignal < Problem.getSwitchThreshold()
+                    % 当前连接基站信号低于阈值，切换到最强基站
+                    connectedBS(wpIdx) = bestBS;
+                    previousBS = bestBS;
                 else
+                    % 当前连接基站信号满足阈值，保持连接不变
                     connectedBS(wpIdx) = previousBS;
                 end
             end
         end
         
-        % 重新计算切换次数
-        switchCount_current = 0;
-        previousBS_switch = connectedBS(1);
-        for wpIdx2 = 2:numWaypoints
-            if connectedBS(wpIdx2) ~= previousBS_switch
-                switchCount_current = switchCount_current + 1;
-            end
-            previousBS_switch = connectedBS(wpIdx2);
-        end
+        % 直接使用算法结果的切换次数（不重新计算）
+        switchCount_current = currentPopObj(2);  % 直接从算法结果中获取
         
         % 为基站分配颜色
         uniqueBSOrder = [];

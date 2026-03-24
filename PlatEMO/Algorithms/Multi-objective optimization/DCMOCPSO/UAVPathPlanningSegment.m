@@ -236,9 +236,49 @@ classdef UAVPathPlanningSegment < PROBLEM
         end
         
         function PopObj = CalObj(obj, PopDec)
-            %CalObj - 计算目标函数值
+            %CalObj - 计算目标函数值（只计算当前段，避免粒子区分度降低）
+            %
+            %   只计算当前段的目标值：
+            %   - 目标1：当前段航点的平均信号强度
+            %   - 目标2：当前段的切换次数
+            %   - 目标3：当前段的路径覆盖率
+            %
+            %   这样可以保持粒子之间的区分度，避免随着段号增加而可行解减少的问题
+            
+            [N, D] = size(PopDec);
+            segmentSize = obj.endIdx - obj.startIdx + 1;
+            numWaypointsInSegment = segmentSize - 1;  % 不包括固定的第一个航点
+            
+            PopObj = zeros(N, obj.M);
+            
+            for i = 1:N
+                % 提取子问题的航点
+                segmentWaypoints = reshape(PopDec(i, :), 3, numWaypointsInSegment)';  % numWaypointsInSegment x 3
+                
+                % 构建当前段的完整航点（包括固定的起点）
+                currentSegmentWaypoints = [obj.fixedStartWaypoint; segmentWaypoints];  % segmentSize x 3
+                
+                % 计算当前段的目标值
+                % 目标1：最大化平均信号强度（转换为最小化负的平均信号强度）
+                avgSignal = obj.originalProblem.calculateAverageSignal(currentSegmentWaypoints);
+                PopObj(i, 1) = -avgSignal;  % 取负值，因为要最小化
+                
+                % 目标2：最小化切换次数
+                switchCount = obj.originalProblem.calculateSwitchCount(currentSegmentWaypoints);
+                PopObj(i, 2) = switchCount;
+                
+                % 目标3：最大化路径覆盖率（转换为最小化负的覆盖率）
+                % 只计算当前段对应的预设路径段的覆盖率
+                coverageRatio = obj.calculateSegmentCoverageRatio(currentSegmentWaypoints);
+                PopObj(i, 3) = -coverageRatio;  % 取负值，因为要最小化
+            end
+        end
+        
+        function PopObj = CalFullPathObj(obj, PopDec)
+            %CalFullPathObj - 计算完整路径的目标函数值
             %
             %   将子问题的解嵌入完整路径，然后计算完整路径的目标值
+            %   这个方法用于DCMOCPSO最后评估完整路径时使用
             
             [N, D] = size(PopDec);
             segmentSize = obj.endIdx - obj.startIdx + 1;
@@ -273,10 +313,272 @@ classdef UAVPathPlanningSegment < PROBLEM
             end
         end
         
+        function coverageRatio = calculateSegmentCoverageRatio(obj, segmentWaypoints)
+            %calculateSegmentCoverageRatio - 计算当前段的路径覆盖率
+            %
+            %   只计算当前段对应的预设路径段的覆盖率
+            %
+            %   输入：
+            %       segmentWaypoints - 当前段的航点（segmentSize x 3）
+            %
+            %   输出：
+            %       coverageRatio - 覆盖率（0~1）
+            
+            % 获取私有属性（通过公共方法）
+            segmentMapping = obj.originalProblem.getWaypointSegmentMapping();
+            presetPath = obj.originalProblem.getPresetPath();
+            
+            % 获取当前段的起始和结束航点索引
+            startWaypointIdx = obj.startIdx;
+            endWaypointIdx = obj.endIdx;
+            
+            % 获取这些航点对应的路径段索引范围
+            segmentIndices = unique(segmentMapping(startWaypointIdx:endWaypointIdx));
+            
+            % 计算总的预设路径段长度
+            totalSegmentLength = 0;
+            for k = 1:length(segmentIndices)
+                segIdx = segmentIndices(k);
+                if segIdx >= 1 && segIdx < size(presetPath, 1)
+                    segmentLength = norm(presetPath(segIdx+1, :) - presetPath(segIdx, :));
+                    totalSegmentLength = totalSegmentLength + segmentLength;
+                end
+            end
+            
+            % 如果总长度为0，返回0覆盖率
+            if totalSegmentLength < 1e-10
+                coverageRatio = 0;
+                return;
+            end
+            
+            % 计算覆盖长度
+            coveredLength = 0;
+            numWaypoints = size(segmentWaypoints, 1);
+            
+            for j = 1:numWaypoints
+                waypointXY = segmentWaypoints(j, 1:2);
+                waypointRadius = segmentWaypoints(j, 3);  % 覆盖半径 = 高度
+                
+                % 遍历当前段对应的所有预设路径段
+                for k = 1:length(segmentIndices)
+                    segIdx = segmentIndices(k);
+                    if segIdx >= 1 && segIdx < size(presetPath, 1)
+                        segmentStartXY = presetPath(segIdx, 1:2);
+                        segmentEndXY = presetPath(segIdx+1, 1:2);
+                        
+                        % 计算圆柱体与该路径段的相交长度
+                        intersectionLength = obj.originalProblem.calculateCylinderSegmentIntersection(...
+                            waypointXY, waypointRadius, segmentStartXY, segmentEndXY);
+                        coveredLength = coveredLength + intersectionLength;
+                    end
+                end
+            end
+            
+            % 覆盖率 = 覆盖长度 / 总路径段长度
+            coverageRatio = min(1.0, coveredLength / totalSegmentLength);
+        end
+        
         function PopCon = CalCon(obj, PopDec)
-            %CalCon - 计算约束违反度
+            %CalCon - 计算约束违反度（只计算当前段，避免粒子区分度降低）
+            %
+            %   只计算当前段相关的约束：
+            %   - 约束0：航点方向约束（当前段内的航点对）
+            %   - 约束1：连续三个航点之间的夹角约束（当前段内）
+            %   - 约束2：航点不在建筑物中（当前段的航点）
+            %   - 约束3：连线不穿过建筑物（当前段内的连线）
+            %   - 约束4：XY平面边界约束（当前段的航点）
+            %
+            %   注意：为了保持约束维度与完整路径一致，未涉及的约束位置填0
+            
+            [N, D] = size(PopDec);
+            segmentSize = obj.endIdx - obj.startIdx + 1;
+            numWaypointsInSegment = segmentSize - 1;  % 不包括固定的第一个航点
+            numWaypoints = size(obj.fullWaypoints, 1);
+            
+            % 获取私有属性（通过公共方法）
+            segmentMapping = obj.originalProblem.getWaypointSegmentMapping();
+            presetPath = obj.originalProblem.getPresetPath();
+            xyBound = obj.originalProblem.getXYBound();
+            
+            % 计算约束数量（与原始问题相同，但只填充当前段相关的约束）
+            % 约束0：航点方向约束（与起点到终点向量的角度约束）：numWaypoints - 1
+            % 约束1：连续三个航点之间的夹角约束：numWaypoints - 2
+            % 约束2：航点不在建筑物中：numWaypoints
+            % 约束3：连线不穿过建筑物：numWaypoints - 1
+            % 约束4：XY平面边界约束（xyBound）：numWaypoints
+            numConstraints = (numWaypoints - 1) + max(0, numWaypoints - 2) + numWaypoints + (numWaypoints - 1) + numWaypoints;
+            PopCon = zeros(N, numConstraints);
+            
+            for i = 1:N
+                % 提取子问题的航点
+                segmentWaypoints = reshape(PopDec(i, :), 3, numWaypointsInSegment)';  % numWaypointsInSegment x 3
+                
+                % 构建当前段的完整航点（包括固定的起点）
+                currentSegmentWaypoints = [obj.fixedStartWaypoint; segmentWaypoints];  % segmentSize x 3
+                
+                % 初始化约束索引
+                constraintIdx = 1;
+                
+                % 约束0：航点方向约束（与起点到终点向量的角度约束）
+                % 只计算当前段内的航点对
+                for j = 1:(numWaypoints - 1)
+                    if j >= obj.startIdx && j < obj.endIdx
+                        % 当前段内的航点对
+                        localIdx = j - obj.startIdx + 1;
+                        a = currentSegmentWaypoints(localIdx, :);
+                        b = currentSegmentWaypoints(localIdx + 1, :);
+                        
+                        % 计算向量：起点到终点
+                        overallDirection = presetPath(end, :) - presetPath(1, :);
+                        
+                        % 计算向量：a到b
+                        vector_ab = b - a;
+                        
+                        % 计算点积：ab · overallDirection
+                        dot_product = dot(vector_ab, overallDirection);
+                        
+                        % 约束违反度 = max(0, -dot_product)
+                        PopCon(i, constraintIdx) = max(0, -dot_product);
+                    else
+                        % 不在当前段内的航点对，约束为0
+                        PopCon(i, constraintIdx) = 0;
+                    end
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束1：连续三个航点之间的夹角约束
+                % 只计算当前段内的三个连续航点
+                for j = 1:(numWaypoints - 2)
+                    if j >= obj.startIdx && j + 1 < obj.endIdx
+                        % 当前段内的三个连续航点
+                        localIdx = j - obj.startIdx + 1;
+                        a = currentSegmentWaypoints(localIdx, :);
+                        b = currentSegmentWaypoints(localIdx + 1, :);
+                        c = currentSegmentWaypoints(localIdx + 2, :);
+                        
+                        % 计算向量：a到b
+                        vector_ab = b - a;
+                        
+                        % 计算向量：b到c
+                        vector_bc = c - b;
+                        
+                        % 计算点积：ab · bc
+                        dot_product_ab_bc = dot(vector_ab, vector_bc);
+                        
+                        % 约束违反度 = max(0, -dot_product_ab_bc)
+                        PopCon(i, constraintIdx) = max(0, -dot_product_ab_bc);
+                    else
+                        % 不在当前段内的三个连续航点，约束为0
+                        PopCon(i, constraintIdx) = 0;
+                    end
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束2：检查航点是否在建筑物中
+                % 只检查当前段的航点
+                for j = 1:numWaypoints
+                    if j >= obj.startIdx && j <= obj.endIdx
+                        % 当前段的航点
+                        localIdx = j - obj.startIdx + 1;
+                        waypoint = currentSegmentWaypoints(localIdx, :);
+                        violation = obj.originalProblem.checkWaypointInObstacle(waypoint);
+                        PopCon(i, constraintIdx) = max(0, violation);
+                    else
+                        % 不在当前段的航点，约束为0
+                        PopCon(i, constraintIdx) = 0;
+                    end
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束3：检查连线是否穿过建筑物
+                % 只检查当前段内的连线
+                for j = 1:(numWaypoints - 1)
+                    if j >= obj.startIdx && j < obj.endIdx
+                        % 当前段内的连线
+                        localIdx = j - obj.startIdx + 1;
+                        currentWP = currentSegmentWaypoints(localIdx, :);
+                        nextWP = currentSegmentWaypoints(localIdx + 1, :);
+                        
+                        violation = obj.originalProblem.checkSegmentIntersectsObstacle(currentWP, nextWP);
+                        PopCon(i, constraintIdx) = max(0, violation);
+                    else
+                        % 不在当前段的连线，约束为0
+                        PopCon(i, constraintIdx) = 0;
+                    end
+                    constraintIdx = constraintIdx + 1;
+                end
+                
+                % 约束4：检查XY平面边界约束（xyBound）
+                % 只检查当前段的航点
+                for j = 1:numWaypoints
+                    if j >= obj.startIdx && j <= obj.endIdx
+                        % 当前段的航点
+                        localIdx = j - obj.startIdx + 1;
+                        waypoint = currentSegmentWaypoints(localIdx, :);
+                        x = waypoint(1);
+                        y = waypoint(2);
+                        
+                        % 获取航点对应的路径段索引
+                        segmentIdx = segmentMapping(j);
+                        
+                        % 获取该路径段的xyBound约束
+                        if ~isempty(xyBound) && segmentIdx >= 1 && segmentIdx <= size(xyBound, 1)
+                            kLower = xyBound(segmentIdx, 1);
+                            cLower = xyBound(segmentIdx, 2);
+                            kUpper = xyBound(segmentIdx, 3);
+                            cUpper = xyBound(segmentIdx, 4);
+                            
+                            violation = 0;
+                            
+                            % 检查下界约束：y > kLower*x + cLower
+                            if kLower == realmax
+                                % 特殊情况：kLower为realmax，检查x > cLower
+                                if x <= cLower
+                                    violation = violation + (cLower - x);
+                                end
+                            else
+                                % 一般情况：y > kLower*x + cLower
+                                lowerBound = kLower * x + cLower;
+                                if y <= lowerBound
+                                    violation = violation + (lowerBound - y);
+                                end
+                            end
+                            
+                            % 检查上界约束：y < kUpper*x + cUpper
+                            if kUpper == realmax
+                                % 特殊情况：kUpper为realmax，检查x < cUpper
+                                if x >= cUpper
+                                    violation = violation + (x - cUpper);
+                                end
+                            else
+                                % 一般情况：y < kUpper*x + cUpper
+                                upperBound = kUpper * x + cUpper;
+                                if y >= upperBound
+                                    violation = violation + (y - upperBound);
+                                end
+                            end
+                            
+                            PopCon(i, constraintIdx) = max(0, violation);
+                        else
+                            % 如果没有定义xyBound或索引超出范围，约束违反度为0
+                            PopCon(i, constraintIdx) = 0;
+                        end
+                    else
+                        % 不在当前段的航点，约束为0
+                        PopCon(i, constraintIdx) = 0;
+                    end
+                    constraintIdx = constraintIdx + 1;
+                end
+            end
+            
+            % 注意：这里返回的约束数组维度与完整路径相同，但只有当前段相关的位置有非零值
+        end
+        
+        function PopCon = CalFullPathCon(obj, PopDec)
+            %CalFullPathCon - 计算完整路径的约束违反度
             %
             %   将子问题的解嵌入完整路径，然后计算完整路径的约束违反度
+            %   这个方法用于DCMOCPSO最后评估完整路径时使用
             
             [N, D] = size(PopDec);
             segmentSize = obj.endIdx - obj.startIdx + 1;
