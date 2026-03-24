@@ -26,7 +26,9 @@ classdef UAVPathPlanningSegment < PROBLEM
         startIdx;            % 当前段在完整路径中的起始航点索引
         endIdx;              % 当前段在完整路径中的结束航点索引
         fullWaypoints;       % 完整路径的所有航点（numWaypoints x 3）
-        fixedStartWaypoint;  % 固定的起始航点（1 x 3）
+        fixedStartWaypoint;  % 固定的第一个航点（1 x 3）
+        fixedSecondWaypoint; % 固定的第二个航点（1 x 3，除第一段外）
+        useFixedSecond;      % 是否使用固定的第二个航点
         fixedEndWaypoint;    % 固定的结束航点（1 x 3，可选）
         useFixedEnd;         % 是否使用固定的结束航点
         presetPathStart;     % 预设路径起点（1 x 3），用于第一段
@@ -54,13 +56,16 @@ classdef UAVPathPlanningSegment < PROBLEM
             obj.fullWaypoints = fullWaypoints;
             obj.presetPathStart = presetPathStart;
             
-            % 设置固定的起始航点
+            % 设置固定的起始航点和第二个航点
             if startIdx == 1
-                % 第一段：固定为预设路径起点
+                % 第一段：只固定第一个航点为预设路径起点
                 obj.fixedStartWaypoint = presetPathStart;
+                obj.useFixedSecond = false;
             else
-                % 其他段：固定为前一段的最后一个航点
-                obj.fixedStartWaypoint = fullWaypoints(startIdx - 1, :);
+                % 其他段：固定前两个航点为上一段的最后两个航点
+                obj.fixedStartWaypoint = fullWaypoints(startIdx, :);  % 上一段的倒数第二个航点
+                obj.fixedSecondWaypoint = fullWaypoints(startIdx + 1, :);  % 上一段的最后一个航点
+                obj.useFixedSecond = true;
             end
             
             % 设置固定的结束航点（可选，通常不使用）
@@ -73,15 +78,25 @@ classdef UAVPathPlanningSegment < PROBLEM
             end
             
             % 调用父类构造函数，设置问题参数
-            % 子问题的决策变量维度：段内航点数 * 3（不包括固定的第一个航点）
+            % 子问题的决策变量维度：
+            %   第一段：段内航点数 * 3 - 3（减去固定的第一个航点）
+            %   其他段：段内航点数 * 3 - 6（减去固定的前两个航点）
             segmentSize = endIdx - startIdx + 1;
             
-            % 检查段大小：至少需要2个航点（1个固定+1个优化）
-            if segmentSize < 2
-                error('UAVPathPlanningSegment: 段大小至少需要2个航点（当前：%d个）', segmentSize);
+            % 检查段大小
+            if startIdx == 1
+                % 第一段：至少需要2个航点（1个固定+1个优化）
+                if segmentSize < 2
+                    error('UAVPathPlanningSegment: 第一段至少需要2个航点（当前：%d个）', segmentSize);
+                end
+                obj.D = (segmentSize - 1) * 3;  % 减去固定的第一个航点
+            else
+                % 其他段：至少需要3个航点（2个固定+1个优化）
+                if segmentSize < 3
+                    error('UAVPathPlanningSegment: 非第一段至少需要3个航点（当前：%d个）', segmentSize);
+                end
+                obj.D = (segmentSize - 2) * 3;  % 减去固定的前两个航点
             end
-            
-            obj.D = (segmentSize - 1) * 3;  % 减去固定的第一个航点
             
             % 目标数量与原始问题相同
             obj.M = originalProblem.M;
@@ -105,9 +120,14 @@ classdef UAVPathPlanningSegment < PROBLEM
                 xyzUpper = [500, 500, 70];  % x, y, z 的上界
             end
             
-            % 为子问题的每个航点（不包括固定的第一个航点）设置边界
-            % obj.D = (segmentSize - 1) * 3，所以需要 (segmentSize - 1) 个航点的边界
-            numWaypointsInSegment = segmentSize - 1;  % 不包括固定的第一个航点
+            % 为子问题的每个航点设置边界
+            if startIdx == 1
+                % 第一段：不包括固定的第一个航点
+                numWaypointsInSegment = segmentSize - 1;
+            else
+                % 其他段：不包括固定的前两个航点
+                numWaypointsInSegment = segmentSize - 2;
+            end
             obj.lower = repmat(xyzLower, 1, numWaypointsInSegment);  % 1 x obj.D
             obj.upper = repmat(xyzUpper, 1, numWaypointsInSegment);  % 1 x obj.D
             
@@ -149,13 +169,23 @@ classdef UAVPathPlanningSegment < PROBLEM
                 N = obj.N;
             end
             
-            % 获取段内的预设航点（不包括固定的第一个航点）
+            % 获取段内的预设航点（不包括固定的航点）
             segmentSize = obj.endIdx - obj.startIdx + 1;
-            if obj.startIdx < obj.endIdx
-                presetSegmentWaypoints = obj.fullWaypoints(obj.startIdx+1:obj.endIdx, :);  % (segmentSize-1) x 3
+            
+            if obj.startIdx == 1
+                % 第一段：不包括固定的第一个航点
+                if obj.startIdx < obj.endIdx
+                    presetSegmentWaypoints = obj.fullWaypoints(obj.startIdx+1:obj.endIdx, :);  % (segmentSize-1) x 3
+                else
+                    presetSegmentWaypoints = [];
+                end
             else
-                % 如果段只有一个航点（不应该发生，但为了安全）
-                presetSegmentWaypoints = [];
+                % 其他段：不包括固定的前两个航点
+                if obj.startIdx + 1 < obj.endIdx
+                    presetSegmentWaypoints = obj.fullWaypoints(obj.startIdx+2:obj.endIdx, :);  % (segmentSize-2) x 3
+                else
+                    presetSegmentWaypoints = [];
+                end
             end
             
             % 生成初始种群
@@ -211,7 +241,13 @@ classdef UAVPathPlanningSegment < PROBLEM
             
             [N, D] = size(PopDec);
             segmentSize = obj.endIdx - obj.startIdx + 1;
-            numWaypointsInSegment = segmentSize - 1;  % 不包括固定的第一个航点
+            
+            % 计算决策变量中的航点数量
+            if obj.startIdx == 1
+                numWaypointsInSegment = segmentSize - 1;  % 第一段：不包括固定的第一个航点
+            else
+                numWaypointsInSegment = segmentSize - 2;  % 其他段：不包括固定的前两个航点
+            end
             
             % 修复航点位置
             for i = 1:N
@@ -247,7 +283,13 @@ classdef UAVPathPlanningSegment < PROBLEM
             
             [N, D] = size(PopDec);
             segmentSize = obj.endIdx - obj.startIdx + 1;
-            numWaypointsInSegment = segmentSize - 1;  % 不包括固定的第一个航点
+            
+            % 计算决策变量中的航点数量
+            if obj.startIdx == 1
+                numWaypointsInSegment = segmentSize - 1;  % 第一段：不包括固定的第一个航点
+            else
+                numWaypointsInSegment = segmentSize - 2;  % 其他段：不包括固定的前两个航点
+            end
             
             PopObj = zeros(N, obj.M);
             
@@ -255,8 +297,14 @@ classdef UAVPathPlanningSegment < PROBLEM
                 % 提取子问题的航点
                 segmentWaypoints = reshape(PopDec(i, :), 3, numWaypointsInSegment)';  % numWaypointsInSegment x 3
                 
-                % 构建当前段的完整航点（包括固定的起点）
-                currentSegmentWaypoints = [obj.fixedStartWaypoint; segmentWaypoints];  % segmentSize x 3
+                % 构建当前段的完整航点
+                if obj.startIdx == 1
+                    % 第一段：包括固定的起点
+                    currentSegmentWaypoints = [obj.fixedStartWaypoint; segmentWaypoints];  % segmentSize x 3
+                else
+                    % 其他段：包括固定的前两个航点
+                    currentSegmentWaypoints = [obj.fixedStartWaypoint; obj.fixedSecondWaypoint; segmentWaypoints];  % segmentSize x 3
+                end
                 
                 % 计算当前段的目标值
                 % 目标1：最大化平均信号强度（转换为最小化负的平均信号强度）
@@ -330,7 +378,14 @@ classdef UAVPathPlanningSegment < PROBLEM
             
             [N, D] = size(PopDec);
             segmentSize = obj.endIdx - obj.startIdx + 1;
-            numWaypointsInSegment = segmentSize - 1;  % 不包括固定的第一个航点
+            
+            % 计算决策变量中的航点数量
+            if obj.startIdx == 1
+                numWaypointsInSegment = segmentSize - 1;  % 第一段：不包括固定的第一个航点
+            else
+                numWaypointsInSegment = segmentSize - 2;  % 其他段：不包括固定的前两个航点
+            end
+            
             numWaypoints = size(obj.fullWaypoints, 1);
             
             % 获取私有属性（通过公共方法）
@@ -351,8 +406,14 @@ classdef UAVPathPlanningSegment < PROBLEM
                 % 提取子问题的航点
                 segmentWaypoints = reshape(PopDec(i, :), 3, numWaypointsInSegment)';  % numWaypointsInSegment x 3
                 
-                % 构建当前段的完整航点（包括固定的起点）
-                currentSegmentWaypoints = [obj.fixedStartWaypoint; segmentWaypoints];  % segmentSize x 3
+                % 构建当前段的完整航点
+                if obj.startIdx == 1
+                    % 第一段：包括固定的起点
+                    currentSegmentWaypoints = [obj.fixedStartWaypoint; segmentWaypoints];  % segmentSize x 3
+                else
+                    % 其他段：包括固定的前两个航点
+                    currentSegmentWaypoints = [obj.fixedStartWaypoint; obj.fixedSecondWaypoint; segmentWaypoints];  % segmentSize x 3
+                end
                 
                 % 初始化约束索引
                 constraintIdx = 1;

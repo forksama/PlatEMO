@@ -9,7 +9,7 @@ classdef DCMOCPSO < ALGORITHM
 % 
 % 参数说明：
 % numSegments --- 5 --- 将问题分成多少段（子问题数量）
-% segmentOverlap --- 1 --- 相邻段之间的重叠航点数（用于平滑连接）
+% segmentOverlap --- 2 --- 相邻段之间的重叠航点数（固定前两个航点以满足约束1）
 % lambda --- 0.5 --- E_k影响权重（MOCPSO_Ek参数，0~1）
 % c_guide --- 0.3 --- 引导粒子权重（MOCPSO_Ek参数）
 % useDynamicGrouping --- false --- 是否使用动态分组比例（MOCPSO_Ek参数）
@@ -189,14 +189,13 @@ methods
                 for prevIdx = 1:numPrevSolutions
                     prevFullWaypoints = AllSolutions{prevIdx};
                     
-                    % 提取前一段的终点作为当前段的起点
-                    % 修正：使用前一段的最后一个航点（startIdx），而不是startIdx-1
+                    % 提取前一段的倒数第二个航点作为当前段的起点
                     fixedStartPoint = prevFullWaypoints(startIdx, :);
                     
                     fprintf('  为第 %d/%d 条前段路径求解（起点: [%.2f, %.2f, %.2f]）...\n', ...
                         prevIdx, numPrevSolutions, fixedStartPoint(1), fixedStartPoint(2), fixedStartPoint(3));
                     
-                    % 创建子问题，固定起点为前一段的终点
+                    % 创建子问题，固定起点为前一段的倒数第二个航点
                     SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, prevFullWaypoints, fixedStartPoint, segmentMaxFEPerPath);
                     SubProblem.FE = 0;
                     
@@ -227,7 +226,8 @@ methods
                         numSubSolutions = length(SubPopulation);
                         fprintf('    获得 %d 个解，拼接路径...\n', numSubSolutions);
                         
-                        segmentSizeInSubProblem = segmentSize - 1;
+                        % 决策变量中的航点数量（除第一段外，不包括固定的前两个航点）
+                        segmentSizeInSubProblem = segmentSize - 2;
                         
                         for j = 1:numSubSolutions
                             segmentWaypointsDec = SubPopulation(j).decs;
@@ -235,10 +235,11 @@ methods
                             
                             % 拼接：复制前段路径，更新当前段
                             newFullWaypoints = prevFullWaypoints;
-                            newFullWaypoints(startIdx, :) = fixedStartPoint;  % 起点为前段终点
+                            % 前两个航点已经固定，不需要更新（startIdx和startIdx+1）
                             
                             if segmentSizeInSubProblem > 0
-                                newFullWaypoints(startIdx+1:endIdx, :) = segmentWaypoints;
+                                % 更新当前段从第三个航点开始的部分
+                                newFullWaypoints(startIdx+2:endIdx, :) = segmentWaypoints;
                             end
                             
                             if isempty(CombinedSolutions)
@@ -273,7 +274,7 @@ methods
         %% 创建最终解集种群
         if isempty(AllSolutions)
             warning('没有找到任何解');
-            FinalPopulation = [];
+            FinalPopulation = SOLUTION.empty;  % 修复：创建空的SOLUTION数组而不是[]
         else
             fprintf('\n最终解集包含 %d 个解\n', length(AllSolutions));
             

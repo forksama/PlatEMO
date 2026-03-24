@@ -8,7 +8,7 @@
 % 4. 可视化路径、基站和障碍物
 
 clear; clc; close all;
-warning('off', 'all');
+% warning('off', 'all');
 
 %% 运行DCMOCPSO优化算法
 fprintf('=== 运行DCMOCPSO优化算法 ===\n');
@@ -16,7 +16,7 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 % 创建DCMOCPSO算法实例
 % 参数格式：{numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation}
 %   numSegments: 将问题分成多少段（子问题数量），默认5
-%   segmentOverlap: 相邻段之间的重叠航点数，默认1
+%   segmentOverlap: 相邻段之间的重叠航点数，默认2（固定前两个航点以满足约束1）
 %   lambda: E_k影响权重（MOCPSO_Ek参数，0~1），默认0.5
 %   c_guide: 引导粒子权重（MOCPSO_Ek参数），默认0.3
 %   useDynamicGrouping: 是否使用动态分组比例（MOCPSO_Ek参数），默认false
@@ -33,7 +33,7 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 %              40-60%迭代:  1.0x (标准)
 %              60-80%迭代:  0.75x
 %              80-100%迭代: 0.5x (强化收敛)
-Algorithm = DCMOCPSO('parameter', {2, 1, 0.5, 0.3, true, true});
+Algorithm = DCMOCPSO('parameter', {2, 2, 0.5, 0.3, true, true});
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
@@ -42,7 +42,7 @@ Algorithm = DCMOCPSO('parameter', {2, 1, 0.5, 0.3, true, true});
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 20, 'maxFE', 200, 'parameter', {20, 10, 4, -85, 0});
+Problem = UAVPathPlanning('N', 20, 'maxFE', 300, 'parameter', {20, 10, 5, -85, 0});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
