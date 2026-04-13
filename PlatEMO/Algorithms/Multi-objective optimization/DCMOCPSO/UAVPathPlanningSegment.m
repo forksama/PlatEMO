@@ -195,8 +195,12 @@ classdef UAVPathPlanningSegment < PROBLEM
             perturbationRange = (obj.upper(1) - obj.lower(1)) * 0.01;  % 1%的扰动
             
             for i = 1:N
-                % 基于预设航点添加随机扰动
-                waypoints = presetSegmentWaypoints + randn(size(presetSegmentWaypoints)) * perturbationRange;
+                % 基于预设航点添加随机扰动（第一个粒子不扰动）
+                if i == 1
+                    waypoints = presetSegmentWaypoints;
+                else
+                    waypoints = presetSegmentWaypoints + randn(size(presetSegmentWaypoints)) * perturbationRange;
+                end
                 
                 % 限制在边界内
                 waypoints = max(waypoints, repmat(obj.lower(1:3), size(waypoints, 1), 1));
@@ -369,7 +373,6 @@ classdef UAVPathPlanningSegment < PROBLEM
             %
             %   只计算当前段相关的约束：
             %   - 约束0：航点方向约束（当前段内的航点对）
-            %   - 约束1：连续三个航点之间的夹角约束（当前段内）
             %   - 约束2：航点不在建筑物中（当前段的航点）
             %   - 约束3：连线不穿过建筑物（当前段内的连线）
             %   - 约束4：XY平面边界约束（当前段的航点）
@@ -393,13 +396,12 @@ classdef UAVPathPlanningSegment < PROBLEM
             presetPath = obj.originalProblem.getPresetPath();
             xyBound = obj.originalProblem.getXYBound();
             
-            % 计算约束数量（与原始问题相同，但只填充当前段相关的约束）
+            % 计算约束数量（与原始问题一致，已临时移除约束1）
             % 约束0：航点方向约束（与起点到终点向量的角度约束）：numWaypoints - 1
-            % 约束1：连续三个航点之间的夹角约束：numWaypoints - 2
             % 约束2：航点不在建筑物中：numWaypoints
             % 约束3：连线不穿过建筑物：numWaypoints - 1
             % 约束4：XY平面边界约束（xyBound）：numWaypoints
-            numConstraints = (numWaypoints - 1) + max(0, numWaypoints - 2) + numWaypoints + (numWaypoints - 1) + numWaypoints;
+            numConstraints = (numWaypoints - 1) + numWaypoints + (numWaypoints - 1) + numWaypoints;
             PopCon = zeros(N, numConstraints);
             
             for i = 1:N
@@ -418,26 +420,49 @@ classdef UAVPathPlanningSegment < PROBLEM
                 % 初始化约束索引
                 constraintIdx = 1;
                 
-                % 约束0：航点方向约束（与起点到终点向量的角度约束）
-                % 只计算当前段内的航点对
+                % 约束0：航点方向约束（与UAVPathPlanning.CalCon对齐）
+                % 检查每个航点指向下一个航点的向量x与“相关预设路径段方向”的点积
+                % 若j与j+1所处预设路径段不同，则与任一段方向点积>=0即可
                 for j = 1:(numWaypoints - 1)
                     if j >= obj.startIdx && j < obj.endIdx
                         % 当前段内的航点对
                         localIdx = j - obj.startIdx + 1;
-                        a = currentSegmentWaypoints(localIdx, :);
-                        b = currentSegmentWaypoints(localIdx + 1, :);
+                        currentWP = currentSegmentWaypoints(localIdx, :);
+                        nextWP    = currentSegmentWaypoints(localIdx + 1, :);
                         
-                        % 计算向量：起点到终点
-                        overallDirection = presetPath(end, :) - presetPath(1, :);
+                        % x = next - current
+                        vector_x = nextWP - currentWP;
                         
-                        % 计算向量：a到b
-                        vector_ab = b - a;
+                        % 获取j与j+1对应的预设路径段索引（与UAVPathPlanning一致）
+                        segJ     = segmentMapping(j);
+                        segJNext = segmentMapping(j+1);
+                        numPresetPoints = size(presetPath, 1);
                         
-                        % 计算点积：ab · overallDirection
-                        dot_product = dot(vector_ab, overallDirection);
+                        if segJ < 1
+                            segJ = 1;
+                        elseif segJ >= numPresetPoints
+                            segJ = numPresetPoints - 1;
+                        end
                         
-                        % 约束违反度 = max(0, -dot_product)
-                        PopCon(i, constraintIdx) = max(0, -dot_product);
+                        if segJNext < 1
+                            segJNext = 1;
+                        elseif segJNext >= numPresetPoints
+                            segJNext = numPresetPoints - 1;
+                        end
+                        
+                        % 计算与j段方向的点积
+                        segmentDirectionJ = presetPath(segJ+1, :) - presetPath(segJ, :);
+                        dotProductJ = dot(vector_x, segmentDirectionJ);
+                        
+                        if segJNext ~= segJ
+                            % 若跨段：只要与任意一段方向点积>=0则满足
+                            segmentDirectionJNext = presetPath(segJNext+1, :) - presetPath(segJNext, :);
+                            dotProductJNext = dot(vector_x, segmentDirectionJNext);
+                            maxDotProduct = max(dotProductJ, dotProductJNext);
+                            PopCon(i, constraintIdx) = max(0, -maxDotProduct);
+                        else
+                            PopCon(i, constraintIdx) = max(0, -dotProductJ);
+                        end
                     else
                         % 不在当前段内的航点对，约束为0
                         PopCon(i, constraintIdx) = 0;
@@ -445,33 +470,8 @@ classdef UAVPathPlanningSegment < PROBLEM
                     constraintIdx = constraintIdx + 1;
                 end
                 
-                % 约束1：连续三个航点之间的夹角约束
-                % 只计算当前段内的三个连续航点
-                for j = 1:(numWaypoints - 2)
-                    if j >= obj.startIdx && j + 1 < obj.endIdx
-                        % 当前段内的三个连续航点
-                        localIdx = j - obj.startIdx + 1;
-                        a = currentSegmentWaypoints(localIdx, :);
-                        b = currentSegmentWaypoints(localIdx + 1, :);
-                        c = currentSegmentWaypoints(localIdx + 2, :);
-                        
-                        % 计算向量：a到b
-                        vector_ab = b - a;
-                        
-                        % 计算向量：b到c
-                        vector_bc = c - b;
-                        
-                        % 计算点积：ab · bc
-                        dot_product_ab_bc = dot(vector_ab, vector_bc);
-                        
-                        % 约束违反度 = max(0, -dot_product_ab_bc)
-                        PopCon(i, constraintIdx) = max(0, -dot_product_ab_bc);
-                    else
-                        % 不在当前段内的三个连续航点，约束为0
-                        PopCon(i, constraintIdx) = 0;
-                    end
-                    constraintIdx = constraintIdx + 1;
-                end
+                % 约束1（连续三个航点夹角约束）已临时移除
+
                 
                 % 约束2：检查航点是否在建筑物中
                 % 只检查当前段的航点
@@ -584,13 +584,12 @@ classdef UAVPathPlanningSegment < PROBLEM
             numWaypointsInSegment = segmentSize - 1;  % 不包括固定的第一个航点
             numWaypoints = size(obj.fullWaypoints, 1);
             
-            % 计算约束数量（与原始问题相同）
+            % 计算约束数量（与原始问题一致，已临时移除约束1）
             % 约束0：航点方向约束（与起点到终点向量的角度约束）：numWaypoints - 1
-            % 约束1：连续三个航点之间的夹角约束：numWaypoints - 2
             % 约束2：航点不在建筑物中：numWaypoints
             % 约束3：连线不穿过建筑物：numWaypoints - 1
             % 约束4：XY平面边界约束（xyBound）：numWaypoints
-            numConstraints = (numWaypoints - 1) + max(0, numWaypoints - 2) + numWaypoints + (numWaypoints - 1) + numWaypoints;
+            numConstraints = (numWaypoints - 1) + numWaypoints + (numWaypoints - 1) + numWaypoints;
             PopCon = zeros(N, numConstraints);
             
             for i = 1:N
@@ -633,7 +632,7 @@ classdef UAVPathPlanningSegment < PROBLEM
                 if ~isprop(obj, 'originalProblem') || isempty(obj.originalProblem)
                     % 如果originalProblem未设置，返回默认参考点
                     % 默认参考点：目标1=105, 目标2=3, 目标3=0.1（3目标）
-                    R = [105, 8, 0.1];
+                    R = [90, 15, 0];
                 else
                     % 尝试使用原始问题的参考点
                     R = obj.originalProblem.GetOptimum(N);
@@ -641,7 +640,7 @@ classdef UAVPathPlanningSegment < PROBLEM
             catch ME
                 % 如果访问失败（例如originalProblem还未初始化），返回默认参考点
                 % 这通常发生在PROBLEM构造函数调用GetOptimum时
-                R = [105, 8, 0.1];
+                R = [90, 15, 0];
             end
         end
         

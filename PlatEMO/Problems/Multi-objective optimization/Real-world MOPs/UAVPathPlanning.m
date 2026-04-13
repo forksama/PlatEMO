@@ -535,8 +535,6 @@ classdef UAVPathPlanning < PROBLEM
             %
             %   约束0：每个航点指向下一个航点的向量x与起点到终点的向量a的点积不能为负数
             %          （即向量x与向量a所成的角度不大于90度）
-            %   约束1：连续三个航点a, b, c之间的夹角约束
-            %          （向量ab与向量bc之间的夹角不大于90度）
             %   约束2：航点不可在建筑物中
             %   约束3：两个航点间的连线不可穿过建筑物
             %   约束4：XY平面边界约束（xyBound）
@@ -559,25 +557,20 @@ classdef UAVPathPlanning < PROBLEM
             [N, D] = size(PopDec);
             numWaypoints = D / 3;
 
-            % 计算起点到终点的向量a（3D向量）
-            startPoint = obj.presetPath(1, :);  % 起点
-            endPoint = obj.presetPath(end, :);  % 终点
-            vector_a = endPoint - startPoint;  % 起点到终点的向量
-            
             % 计算最大允许距离（无人机最大速度 * TTT）
             maxDistance = obj.velocity * obj.TTT;
             
-            % 约束数量：
+            % 约束数量（已临时移除约束1：连续三个航点夹角约束）：
             %   0. 航点方向约束（与起点到终点向量的角度约束）：numWaypoints - 1
-            %   1. 连续三个航点之间的夹角约束：numWaypoints - 2（需要至少3个航点）
             %   2. 航点不在建筑物中：numWaypoints
             %   3. 连线不穿过建筑物：numWaypoints - 1
             %   4. XY平面边界约束（xyBound）：numWaypoints
-            numConstraints = (numWaypoints - 1) + max(0, numWaypoints - 2) + numWaypoints + (numWaypoints - 1) + numWaypoints;
+            numConstraints = (numWaypoints - 1) + numWaypoints + (numWaypoints - 1) + numWaypoints;
             PopCon = zeros(N, numConstraints);
             
             % 获取航点到路径段的映射（用于xyBound约束）
             segmentMapping = obj.getWaypointSegmentMapping();
+            numPresetPoints = size(obj.presetPath, 1);
             
             for i = 1:N
                 % 提取航点坐标（3D：x, y, z）
@@ -590,8 +583,8 @@ classdef UAVPathPlanning < PROBLEM
                 constraintIdx = 1;
 
                                 
-                % 约束0：检查每个航点指向下一个航点的向量x与向量a的点积
-                % 要求：x · a >= 0（角度不大于90度）
+                % 约束0：检查每个航点指向下一个航点的向量x与相关路径段方向的点积
+                % 要求：若j与j+1所属路径段不同，则与任一段方向点积>=0即可
                 for j = 1:numWaypoints-1
                     currentWP = waypoints(j, :);
                     nextWP = waypoints(j+1, :);
@@ -599,35 +592,44 @@ classdef UAVPathPlanning < PROBLEM
                     % 计算当前航点指向下一个航点的向量x（3D向量）
                     vector_x = nextWP - currentWP;
                     
-                    % 计算点积：x · a
-                    dot_product = dot(vector_x, vector_a);
+                    % 获取j与j+1对应的路径段索引，并限制在有效范围内
+                    segJ = segmentMapping(j);
+                    segJNext = segmentMapping(j+1);
+                    numPresetPoints = size(obj.presetPath, 1);
                     
-                    % 约束违反度 = max(0, -dot_product)
-                    % 如果dot_product < 0（角度大于90度），则违反约束
-                    PopCon(i, constraintIdx) = max(0, -dot_product);
+                    if segJ < 1
+                        segJ = 1;
+                    elseif segJ >= numPresetPoints
+                        segJ = numPresetPoints - 1;
+                    end
+                    
+                    if segJNext < 1
+                        segJNext = 1;
+                    elseif segJNext >= numPresetPoints
+                        segJNext = numPresetPoints - 1;
+                    end
+                    
+                    % 分别计算与j段、j+1段方向的点积
+                    segmentDirectionJ = obj.presetPath(segJ+1, :) - obj.presetPath(segJ, :);
+                    dotProductJ = dot(vector_x, segmentDirectionJ);
+                    
+                    if segJNext ~= segJ
+                        segmentDirectionJNext = obj.presetPath(segJNext+1, :) - obj.presetPath(segJNext, :);
+                        dotProductJNext = dot(vector_x, segmentDirectionJNext);
+                        
+                        % 若跨段，只要与任意一段方向点积>=0，则视为满足约束
+                        maxDotProduct = max(dotProductJ, dotProductJNext);
+                        PopCon(i, constraintIdx) = max(0, -maxDotProduct);
+                    else
+                        % 若未跨段，则仍按当前段方向判断
+                        PopCon(i, constraintIdx) = max(0, -dotProductJ);
+                    end
+                    
                     constraintIdx = constraintIdx + 1;
                 end
                 
-                % 约束1：检查连续三个航点a, b, c之间的夹角约束
-                % 要求：向量ab与向量bc之间的夹角不大于90度
-                % 即：ab · bc >= 0（点积非负表示夹角不大于90度）
-                for j = 1:numWaypoints-2
-                    a = waypoints(j, :);      % 航点a
-                    b = waypoints(j+1, :);    % 航点b（a的下一个）
-                    c = waypoints(j+2, :);    % 航点c（b的下一个）
-                    
-                    % 计算向量ab和bc
-                    vector_ab = b - a;
-                    vector_bc = c - b;
-                    
-                    % 计算点积：ab · bc
-                    dot_product_ab_bc = dot(vector_ab, vector_bc);
-                    
-                    % 约束违反度 = max(0, -dot_product_ab_bc)
-                    % 如果dot_product_ab_bc < 0（夹角大于90度），则违反约束
-                    PopCon(i, constraintIdx) = max(0, -dot_product_ab_bc);
-                    constraintIdx = constraintIdx + 1;
-                end
+                % 约束1（连续三个航点夹角约束）已临时移除
+
                 
                 % 约束2：检查航点是否在建筑物中
                 for j = 1:numWaypoints
@@ -1267,7 +1269,7 @@ classdef UAVPathPlanning < PROBLEM
             % - 目标3（-coverageRatio）：最差情况覆盖率为0，所以-coverageRatio为0
             %   设置参考点为0.1（比0稍大一点），确保覆盖所有情况
             
-            R = [105, 8, 0.1];
+            R = [90, 15, 0];
             
             % 注意：如果HV仍然为0，可能是以下原因：
             % 1. 参考点仍然太小，实际解比参考点还差
@@ -1294,9 +1296,14 @@ classdef UAVPathPlanning < PROBLEM
             if method == 0  % 0 = 固定预设路径
                 % 固定的预设路径点（按顺序）
                 presetPath = [
-                    280,  280,  40;   % 起点
+                    140,  100,  40;   % 起点
                     140,  280,  40;
-                    140,  100,  40
+                    280,  280,  40;
+                    280,  560,  40;
+                    700,  560,  40;
+                    700,  1330, 40;
+                    350,  1330, 40;
+                    350,  1540, 40
                 ];
                 
                 % XY平面边界约束（xyBound）
@@ -1306,10 +1313,15 @@ classdef UAVPathPlanning < PROBLEM
                 %   - 特殊情况：若kLower或kUpper为realmax，则：
                 %     * 当kLower为realmax时，满足x > cLower
                 %     * 当kUpper为realmax时，满足x < cUpper
-                % 示例：对于路径段[40,40,40]到[80,40,40]，约束y>33且y<50
+                % 目前路面宽度为30，因此两条边界各距离对应路径段15
                 obj.xyBound = [
-                    0, 265, 0, 295;  % 路径段1：[40,40,40]到[80,40,40]
-                    realmax, 125, realmax, 155   % 路径段2：[123,40,40]到[123,150,40]
+                    realmax, 125, realmax, 155;   % 路径段1：[140,100,40]到[140,280,40]
+                    0, 265, 0, 295;  % 路径段2：[140,280,40]到[280,280,40]
+                    realmax, 265, realmax, 295;   % 路径段3：[280,280,40]到[280,560,40]
+                    0, 545, 0, 575;  % 路径段4：[280,560,40]到[700,560,40]
+                    realmax, 685, realmax, 715;  % 路径段5：[700,560,40]到[700,1330,40]
+                    0, 1315, 0, 1345;  % 路径段6：[700,1330,40]到[350,1330,40]
+                    realmax, 335, realmax, 365  % 路径段7：[350,1330,40]到[350,1540,40]
                 ];
             else
                 error('未知的预设路径生成方法: %d', method);

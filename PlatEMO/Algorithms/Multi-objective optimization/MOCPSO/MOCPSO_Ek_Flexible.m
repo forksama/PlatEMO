@@ -1,53 +1,45 @@
-classdef MOCPSO_Ek < ALGORITHM
+classdef MOCPSO_Ek_Flexible < ALGORITHM
 % <multi> <real/binary/permutation> <constrained/none>
-% MOCPSO_Ek: MOCPSO with Dimension Exploration Contribution
+% MOCPSO_Ek_Flexible: MOCPSO with Optional Dimension Exploration Contribution
 % 
-% 在原始MOCPSO基础上引入维度探索贡献机制：
-% 1. Range_j = max(x_k,j) - min(x_k,j)  维度j的探索范围
-% 2. W_j = Range_j / sum(Range_i)       维度j的归一化探索度
-% 3. E_k = sum((1-W_j) * |x_k,j - x_center,j|)  粒子k的维度探索贡献
-% 4. APD_k = (1 + tau_k) * d_k / (1 + lambda * E_k)  改进的角度惩罚距离
-%
-% 改进点：
-% - 环境选择中使用改进的APD公式，E_k作为奖励因子
-% - 从所有粒子中基于E_k选择引导粒子
-% - 在DSS和CSS更新公式中加入向引导粒子的权重项
-%
-%------------------------------- Reference --------------------------------
-% Based on: Zhang, Y., Li, B., Hong, W., & Zhou, A.
-% "MOCPSO: A multi-objective cooperative particle swarm optimization algorithm 
-% with dual search strategies." 
-% Neurocomputing 562 (2023): 126892.
+% 新增参数：
+%   useEk - 是否启用维度探索贡献机制（默认true）
+%     - true:  使用E_k机制（原MOCPSO_Ek行为）
+%     - false: 不使用E_k机制（回退到原始MOCPSO行为）
 %
 %------------------------------- Copyright --------------------------------
 % Copyright (c) 2022 BIMK Group. You are free to use the PlatEMO for
-% research purposes. All publications which use this platform or any code
-% in the platform should acknowledge the use of "PlatEMO" and reference "Ye
-% Tian, Ran Cheng, Xingyi Zhang, and Yaochu Jin, PlatEMO: A MATLAB platform
-% for evolutionary multi-objective optimization [educational forum], IEEE
-% Computational Intelligence Magazine, 2017, 12(4): 73-87".
+% research purposes.
 %--------------------------------------------------------------------------
 properties
     lambda = 0.5;                 % E_k影响权重 (0~1)
     c_guide = 0.3;                % 引导粒子权重
     useDynamicGrouping = false;   % 是否使用动态分组比例
     useDynamicMutation = false;   % 是否使用动态变异率
+    useEk = true;                 % 是否启用E_k机制（新增）
 end
 
 methods
     function main(Algorithm, Problem)
         
         %% 参数设置
-        [lambda, c_guide, useDynamicGrouping, useDynamicMutation] = Algorithm.ParameterSet(0.5, 0.3, false, false);
+        [lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk] = Algorithm.ParameterSet(0.5, 0.3, false, false, true);
         Algorithm.lambda = lambda;
         Algorithm.c_guide = c_guide;
         Algorithm.useDynamicGrouping = useDynamicGrouping;
         Algorithm.useDynamicMutation = useDynamicMutation;
+        Algorithm.useEk = useEk;
         
         %% Generate random population
-        [V,~] = UniformPoint(Problem.N * 100, Problem.M);
+        [V,~] = UniformPoint(Problem.N * 10, Problem.M);
         Population = Problem.Initialization();
-        Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda);
+        
+        % 根据useEk选择环境选择函数
+        if useEk
+            Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda);
+        else
+            Population = EnvironmentalSelection(Population, V, (Problem.FE/Problem.maxFE)^2);
+        end
         
         % 如果环境选择后种群为空（无可行解），最多重试5次
         maxRetries = 5;
@@ -55,7 +47,11 @@ methods
         while isempty(Population) && retryCount < maxRetries
             warning('环境选择后种群为空（无可行解），重新初始化（重试 %d/%d）', retryCount + 1, maxRetries);
             Population = Problem.Initialization();
-            Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda);
+            if useEk
+                Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda);
+            else
+                Population = EnvironmentalSelection(Population, V, (Problem.FE/Problem.maxFE)^2);
+            end
             retryCount = retryCount + 1;
         end
         
@@ -68,7 +64,7 @@ methods
         CV = sum(max(0, Population.cons), 2);
         numFeasible = sum(CV == 0);
         numInfeasible = sum(CV > 0);
-        fprintf('初始种群: 可行解=%d, 不可行解=%d, 总计=%d\n', numFeasible, numInfeasible, length(Population));
+        fprintf('初始种群: 可行解=%d, 不可行解=%d, 总计=%d (useEk=%d)\n', numFeasible, numInfeasible, length(Population), useEk);
         
         %% Optimization
         iteration = 0;
@@ -81,7 +77,11 @@ methods
                 if isempty(Population)
                     warning('迭代 %d: 种群为空（无可行解），尝试重新初始化', iteration);
                     tempPopulation = Problem.Initialization();
-                    Population = EnvironmentalSelectionWithEk(tempPopulation, V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+                    if useEk
+                        Population = EnvironmentalSelectionWithEk(tempPopulation, V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+                    else
+                        Population = EnvironmentalSelection(tempPopulation, V, (Problem.FE/Problem.maxFE)^2);
+                    end
                     if isempty(Population)
                         warning('迭代 %d: 重新初始化后仍无可行解，算法终止', iteration);
                         return;  % 无可行解，直接返回
@@ -99,11 +99,25 @@ methods
                         mutationRateMultiplier = 1.0;  % 使用固定变异率
                     end
                     Offspring = Polynomial_mutation(Problem, Population.decs, PopVel, N/2, D, mutationRateMultiplier);
-                    Population = EnvironmentalSelectionWithEk([Population, Offspring], V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+                    if useEk
+                        Population = EnvironmentalSelectionWithEk([Population, Offspring], V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+                    else
+                        Population = EnvironmentalSelection([Population, Offspring], V, (Problem.FE/Problem.maxFE)^2);
+                    end
                     
                     if isempty(Population)
-                        warning('迭代 %d: 环境选择后种群为空', iteration);
-                        Population = [Population, Offspring];
+                        warning('迭代 %d: 环境选择后种群为空（无可行解），尝试保留所有子代', iteration);
+                        Population = Offspring;
+                        % 再次筛选，如果仍为空则终止
+                        if useEk
+                            Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+                        else
+                            Population = EnvironmentalSelection(Population, V, (Problem.FE/Problem.maxFE)^2);
+                        end
+                        if isempty(Population)
+                            warning('迭代 %d: 子代中也无可行解，算法终止', iteration);
+                            return;
+                        end
                     end
                 else
                     warning('迭代 %d: 无法生成有效种群，跳过', iteration);
@@ -116,7 +130,6 @@ methods
                 fprintf('迭代 %d (FE=%d/%d): 可行解=%d, 不可行解=%d, 总计=%d\n', ...
                     iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population));
                 
-                % ========== 修复：在continue之前检查是否需要筛选帕累托前沿 ==========
                 if Problem.FE >= Problem.maxFE
                     Population = filterParetoFront(Population, iteration);
                 end
@@ -140,17 +153,12 @@ methods
             if useDynamicGrouping
                 % 动态分组比例方案
                 if t < 0.25
-                    % 0-25%: 强化多样性 (更多Winner，更多探索)
                     ratio = [2, 1, 1];
                 elseif t < 0.75
-                    % 25-75%: 均衡探索与收敛
                     ratio = [1, 1, 1];
                 else
-                    % 75-100%: 强化收敛 (更多Loser2，更多收敛学习)
                     ratio = [1, 1, 2];
                 end
-                
-                % 使用动态分组方法
                 [Winner, Loser1, Loser2] = groupParticlesByRatio(Population, FitValue, ratio);
             else
                 % 原始分组方法（1:1:1 + swapWL）
@@ -163,24 +171,37 @@ methods
                 [Loser1, Loser2] = swapWL(Loser1, Loser2, FitValue);
             end
             
-            % ========== 新增：计算E_k并选择引导粒子 ==========
-            [E_k, ~, ~, ~, guideIdx] = calculateDimensionExploration(Population);
-            GuideDec = Population(guideIdx).decs;
-            
-            % 动态引导权重（前期强，后期弱）
-            c_guide_dynamic = c_guide * (1 - t);
+            % ========== 根据useEk决定是否使用引导粒子 ==========
+            if useEk
+                [E_k, ~, ~, ~, guideIdx] = calculateDimensionExploration(Population);
+                GuideDec = Population(guideIdx).decs;
+                % 动态引导权重（前期强，后期弱）
+                c_guide_dynamic = c_guide * (1 - t);
+            else
+                E_k = zeros(length(Population), 1);  % 不使用E_k
+                GuideDec = [];  % 不使用引导粒子
+                c_guide_dynamic = 0;  % 禁用引导权重
+            end
             
             % 更新操作（带引导粒子和动态变异率）
             [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Population(Loser1), Population(Loser2), Population(Winner), GuideDec, c_guide_dynamic, Problem, mutationRateMultiplier);
             
-            % 环境选择（使用改进的APD公式）
-            Population = EnvironmentalSelectionWithEk([Population, Offspring1, Offspring2, Offspring3], V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+            % 环境选择
+            if useEk
+                Population = EnvironmentalSelectionWithEk([Population, Offspring1, Offspring2, Offspring3], V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+            else
+                Population = EnvironmentalSelection([Population, Offspring1, Offspring2, Offspring3], V, (Problem.FE/Problem.maxFE)^2);
+            end
             
             if isempty(Population)
                 warning('迭代 %d: 环境选择后种群为空（无可行解），尝试保留所有子代', iteration);
                 Population = [Offspring1, Offspring2, Offspring3];
                 % 再次筛选，如果仍为空则终止
-                Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+                if useEk
+                    Population = EnvironmentalSelectionWithEk(Population, V, (Problem.FE/Problem.maxFE)^2, lambda, isLastIteration);
+                else
+                    Population = EnvironmentalSelection(Population, V, (Problem.FE/Problem.maxFE)^2);
+                end
                 if isempty(Population)
                     warning('迭代 %d: 子代中也无可行解，算法终止', iteration);
                     return;
@@ -191,11 +212,14 @@ methods
             CV = sum(max(0, Population.cons), 2);
             numFeasible = sum(CV == 0);
             numInfeasible = sum(CV > 0);
-            fprintf('迭代 %d (FE=%d/%d): 可行解=%d, 不可行解=%d, 总计=%d, E_k均值=%.4f\n', ...
-                iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population), mean(E_k));
+            if useEk
+                fprintf('迭代 %d (FE=%d/%d): 可行解=%d, 不可行解=%d, 总计=%d, E_k均值=%.4f\n', ...
+                    iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population), mean(E_k));
+            else
+                fprintf('迭代 %d (FE=%d/%d): 可行解=%d, 不可行解=%d, 总计=%d (E_k disabled)\n', ...
+                    iteration, Problem.FE, Problem.maxFE, numFeasible, numInfeasible, length(Population));
+            end
             
-            % ========== 检查是否是最后一次迭代，如果是则筛选帕累托前沿 ==========
-            % 【关键】必须在NotTerminated之前筛选，因为NotTerminated会保存Population
             if Problem.FE >= Problem.maxFE
                 Population = filterParetoFront(Population, iteration);
             end
@@ -212,27 +236,14 @@ function [Winner, Loser] = swapWL(Winner, Loser, FitValue)
 end
 
 function ParetoFront = filterParetoFront(Population, iteration)
-    % 筛选帕累托前沿（第一前沿）
-    %
-    % 输入：
-    %   Population - 当前种群
-    %   iteration - 当前迭代次数（用于打印信息）
-    %
-    % 输出：
-    %   ParetoFront - 帕累托前沿（第一前沿）
-    
     fprintf('\n========== 算法即将结束，筛选帕累托前沿 ==========\n');
     fprintf('迭代结束时种群大小: %d\n', length(Population));
     
-    % 使用PlatEMO内置的非支配排序
     [FrontNo, ~] = NDSort(Population.objs, Population.cons, inf);
-    
-    % 只保留第一前沿（FrontNo == 1）
     ParetoFront = Population(FrontNo == 1);
     
     fprintf('帕累托前沿大小: %d\n', length(ParetoFront));
     
-    % 打印帕累托前沿信息
     CV_final = sum(max(0, ParetoFront.cons), 2);
     numFeasible_final = sum(CV_final == 0);
     numInfeasible_final = sum(CV_final > 0);

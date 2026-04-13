@@ -35,18 +35,20 @@ properties
     c_guide = 0.3;                  % 引导粒子权重 (MOCPSO_Ek参数)
     useDynamicGrouping = false;     % 是否使用动态分组比例 (MOCPSO_Ek参数)
     useDynamicMutation = false;     % 是否使用动态变异率 (MOCPSO_Ek参数)
+    useEk = true;                   % 是否启用E_k机制 (新增参数)
 end
 
 methods
     function main(Algorithm, Problem)
         %% 参数设置
-        [numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation] = Algorithm.ParameterSet(5, 1, 0.5, 0.3, false, false);
+        [numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk] = Algorithm.ParameterSet(5, 1, 0.5, 0.3, false, false, true);
         Algorithm.numSegments = numSegments;
         Algorithm.segmentOverlap = segmentOverlap;
         Algorithm.lambda = lambda;
         Algorithm.c_guide = c_guide;
         Algorithm.useDynamicGrouping = useDynamicGrouping;
         Algorithm.useDynamicMutation = useDynamicMutation;
+        Algorithm.useEk = useEk;
         
         % 检查问题类型
         if ~isa(Problem, 'UAVPathPlanning')
@@ -117,9 +119,10 @@ methods
                 SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, fullWaypoints, presetPathStart, segmentMaxFE);
                 SubProblem.FE = 0;
                 
-                MOCPSOAlg = MOCPSO_Ek();
+                MOCPSOAlg = MOCPSO_Ek_Flexible();
                 MOCPSOAlg.lambda = lambda;
                 MOCPSOAlg.c_guide = c_guide;
+                MOCPSOAlg.useEk = useEk;
                 MOCPSOAlg.useDynamicGrouping = useDynamicGrouping;
                 MOCPSOAlg.useDynamicMutation = useDynamicMutation;
                 previousProblem = PROBLEM.Current();
@@ -199,9 +202,10 @@ methods
                     SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, prevFullWaypoints, fixedStartPoint, segmentMaxFEPerPath);
                     SubProblem.FE = 0;
                     
-                    MOCPSOAlg = MOCPSO_Ek();
+                    MOCPSOAlg = MOCPSO_Ek_Flexible();
                     MOCPSOAlg.lambda = lambda;
                     MOCPSOAlg.c_guide = c_guide;
+                    MOCPSOAlg.useEk = useEk;
                     MOCPSOAlg.useDynamicGrouping = useDynamicGrouping;
                     MOCPSOAlg.useDynamicMutation = useDynamicMutation;
                     previousProblem = PROBLEM.Current();

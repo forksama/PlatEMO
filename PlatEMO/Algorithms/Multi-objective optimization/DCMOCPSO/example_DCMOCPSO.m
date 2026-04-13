@@ -33,7 +33,7 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 %              40-60%迭代:  1.0x (标准)
 %              60-80%迭代:  0.75x
 %              80-100%迭代: 0.5x (强化收敛)
-Algorithm = DCMOCPSO('parameter', {2, 2, 0.5, 0.3, true, true});
+Algorithm = DCMOCPSO('parameter', {5, 2, 0.5, 0.3, true, true});
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
@@ -42,13 +42,18 @@ Algorithm = DCMOCPSO('parameter', {2, 2, 0.5, 0.3, true, true});
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 20, 'maxFE', 300, 'parameter', {20, 10, 5, -85, 0});
+Problem = UAVPathPlanning('N', 20, 'maxFE', 100, 'parameter', {20, 20, 5, -85, 0});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
 fprintf('  种群大小: %d\n', Problem.N);
 fprintf('  最大函数评估次数: %d\n', Problem.maxFE);
 fprintf('\n');
+
+
+
+% Algorithm = MOCPSO_Ek('lambda', 0.3, 'c_guide', 0.3);
+% Problem = UAVPathPlanning('N', 20, 'maxFE', 3000, 'parameter', {20, 10, 5, -85, 0});
 
 % 运行优化
 Algorithm.Solve(Problem);
