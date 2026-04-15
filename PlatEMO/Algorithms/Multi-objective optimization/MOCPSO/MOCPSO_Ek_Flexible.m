@@ -31,7 +31,7 @@ methods
         Algorithm.useEk = useEk;
         
         %% Generate random population
-        [V,~] = UniformPoint(Problem.N * 10, Problem.M);
+        [V,~] = UniformPoint(Problem.N, Problem.M);
         Population = Problem.Initialization();
         
         % 根据useEk选择环境选择函数
