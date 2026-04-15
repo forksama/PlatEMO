@@ -44,6 +44,7 @@ classdef UAVPathPlanning < PROBLEM
         TTT;             % 时间间隔（s）
         numBS;           % 基站数量
         switchThreshold; % 切换阈值（dBm）
+        switchMethod;    % 切换算法选择（0=基于阈值的切换，未来可扩展）
         P_tx;            % 无人机发射功率（dBm）
         obstacleMethod;  % 障碍物与预设路径生成方法（固定为0，基于αβγ的方法）
         alpha;           % 城市密度比（建筑总面积与土地总面积的比值，0.1~0.5）
@@ -59,9 +60,19 @@ classdef UAVPathPlanning < PROBLEM
     end
     
     methods
+        %% 获取切换方法（公共方法）
+        function method = getSwitchMethod(obj)
+            method = obj.switchMethod;
+        end
+        
         %% 获取切换阈值（公共方法）
         function threshold = getSwitchThreshold(obj)
             threshold = obj.switchThreshold;
+        end
+        
+        %% 获取切换算法选择（公共方法）
+        function switchMethod = getSwitchMethod(obj)
+            switchMethod = obj.switchMethod;
         end
         
         %% 获取无人机发射功率（公共方法）
@@ -117,13 +128,14 @@ classdef UAVPathPlanning < PROBLEM
             userUpper = obj.upper;
             
             % 获取参数（使用ParameterSet获取，如果obj.parameter被指定则使用，否则使用默认值）
-            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx}
+            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod}
             %   bsPerKm2: 每平方公里的基站数量
             %   velocity: 无人机最大速度（m/s）
             %   TTT: 时间间隔（s）
             %   switchThreshold: 切换阈值（dBm）
             %   obstacleMethod: 障碍物生成方法（固定为0，基于αβγ的方法，固定α=0.3, β=500, γ=40）
             %   P_tx: 无人机发射功率（dBm，默认为30dBm）
+            %   switchMethod: 切换算法选择（0=基于阈值的切换，默认0）
             % 注意：不再需要numWaypoints参数，航点数量将自动计算
             if isempty(obj.parameter)
                 bsPerKm2 = 10;  % 默认每平方公里10个基站
@@ -132,6 +144,7 @@ classdef UAVPathPlanning < PROBLEM
                 switchThreshold = -80;
                 obstacleMethod = 0;  % 0 = 基于αβγ的新方法
                 P_tx = 30;  % 默认发射功率30dBm
+                switchMethod = 0;  % 默认使用基于阈值的切换
             else
                 params = obj.parameter;
                 if iscell(params) && length(params) >= 4
@@ -154,6 +167,11 @@ classdef UAVPathPlanning < PROBLEM
                     else
                         P_tx = 30;  % 默认发射功率30dBm
                     end
+                    if length(params) >= 7
+                        switchMethod = params{7};  % 切换算法选择
+                    else
+                        switchMethod = 0;  % 默认使用基于阈值的切换
+                    end
                 else
                     bsPerKm2 = 10;  % 默认每平方公里10个基站
                     velocity = 10;
@@ -161,6 +179,7 @@ classdef UAVPathPlanning < PROBLEM
                     switchThreshold = -80;
                     obstacleMethod = 0;
                     P_tx = 30;  % 默认发射功率30dBm
+                    switchMethod = 0;  % 默认使用基于阈值的切换
                 end
             end
             
@@ -174,6 +193,7 @@ classdef UAVPathPlanning < PROBLEM
             obj.switchThreshold = switchThreshold;
             obj.obstacleMethod = obstacleMethod;
             obj.P_tx = P_tx;  % 保存无人机发射功率
+            obj.switchMethod = switchMethod;  % 保存切换算法选择
             
             % 覆盖半径不再使用固定值：覆盖半径取每个航点当前高度z（r = waypoint(3)）
             % 因此这里不再设置obj.coverageRadius
@@ -783,6 +803,10 @@ classdef UAVPathPlanning < PROBLEM
         %% 计算切换次数
         function switchCount = calculateSwitchCount(obj, waypoints)
             % waypoints: numWaypoints x 3 (x, y, z)
+            % 根据 switchMethod 参数选择切换算法
+            % switchMethod = 0: 基于阈值的切换（当前连接基站信号 < 阈值时切换到最强基站）
+            % switchMethod = 1: （未来可扩展的其他切换算法）
+            
             numWaypoints = size(waypoints, 1);
             switchCount = 0;
             previousBS = 0;  % 上一个航点连接的基站索引
@@ -815,23 +839,38 @@ classdef UAVPathPlanning < PROBLEM
                 % 选择信号最强的基站
                 [~, bestBS] = max(signalStrengths);
                 
-                % 判断是否需要切换（基于“当前连接基站”的信号强度）
-                % 需求定义：如果当前连接基站的信号 < 阈值，则切换到信号更好的基站（这里取最强基站）
-                if j == 1
-                    % 第一个航点：初始化连接为最强基站
-                    previousBS = bestBS;
-                else
-                    currentConnectedSignal = signalStrengths(previousBS);
-                    if currentConnectedSignal < obj.switchThreshold
-                        % 当前连接基站信号低于阈值，执行切换到最强基站
-                        if bestBS ~= previousBS
-                            switchCount = switchCount + 1;
+                % 根据 switchMethod 选择切换算法
+                switch obj.switchMethod
+                    case 0
+                        % 基于阈值的切换算法（原有逻辑）
+                        if j == 1
+                            % 第一个航点：初始化连接为最强基站
+                            previousBS = bestBS;
+                        else
+                            currentConnectedSignal = signalStrengths(previousBS);
+                            if currentConnectedSignal < obj.switchThreshold
+                                % 当前连接基站信号低于阈值，执行切换到最强基站
+                                if bestBS ~= previousBS
+                                    switchCount = switchCount + 1;
+                                end
+                                previousBS = bestBS;
+                            end
+                            % 否则：当前连接基站信号满足阈值，保持连接不变
                         end
-                        previousBS = bestBS;
-                    else
-                        % 当前连接基站信号满足阈值，保持连接不变
-                        % previousBS 保持不变
-                    end
+                    otherwise
+                        % 默认使用基于阈值的切换算法
+                        warning('UAVPathPlanning:未知的切换算法 switchMethod=%d，使用默认的基于阈值的切换', obj.switchMethod);
+                        if j == 1
+                            previousBS = bestBS;
+                        else
+                            currentConnectedSignal = signalStrengths(previousBS);
+                            if currentConnectedSignal < obj.switchThreshold
+                                if bestBS ~= previousBS
+                                    switchCount = switchCount + 1;
+                                end
+                                previousBS = bestBS;
+                            end
+                        end
                 end
             end
         end
