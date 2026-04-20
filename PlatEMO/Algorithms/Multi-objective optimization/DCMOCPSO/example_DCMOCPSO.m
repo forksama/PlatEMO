@@ -33,7 +33,7 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 %              40-60%迭代:  1.0x (标准)
 %              60-80%迭代:  0.75x
 %              80-100%迭代: 0.5x (强化收敛)
-Algorithm = DCMOCPSO('parameter', {5, 2, 0.5, 0.3, true, true});
+Algorithm = DCMOCPSO('parameter', {1, 2, 0.5, 0.3, true, true});
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
@@ -42,7 +42,7 @@ Algorithm = DCMOCPSO('parameter', {5, 2, 0.5, 0.3, true, true});
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 20, 'maxFE', 100, 'parameter', {20, 20, 5, -85, 0});
+Problem = UAVPathPlanning('N', 20, 'maxFE', 40, 'parameter', {20, 20, 5, -101.5, 0, 30, 1});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
@@ -386,6 +386,10 @@ if length(finalPopulation) >= 1
     end
     
     % 为每个最优解创建单独图
+    % 获取切换算法参数
+    switchMethod = Problem.getSwitchMethod();
+    fprintf('当前切换算法: switchMethod = %d\n', switchMethod);
+    
     for pathIdx = 1:length(paths)
         currentPath = paths{pathIdx};
         currentName = pathNames{pathIdx};
@@ -393,12 +397,35 @@ if length(finalPopulation) >= 1
         currentMarker = pathMarkers{pathIdx};
         currentPopObj = PopObj(pathIndices(pathIdx), :);
         
-        % 计算每个航点连接的基站
+        % 计算每个航点连接的基站（根据switchMethod选择算法）
         numWaypoints = size(currentPath, 1);
         connectedBS = zeros(numWaypoints, 1);
-        previousBS = 0;
         
         fprintf('计算 %s 的基站连接...\n', currentName);
+        
+        % 使用与calculateSwitchCount相同的逻辑计算基站连接
+        previousBS = 0;
+        
+        % CASH算法参数（与calculateSwitchCount保持一致）
+        delta = 4;  % 安全裕度（dB）
+        minSignalThreshold = -110;  % 最小可用信号阈值（dBm）
+        hysteresisMargin = 3;  % 迟滞余量（dB）
+        
+        % CASH算法预计算数据
+        if switchMethod == 1
+            startPoint = currentPath(1, 1:2);
+            endPoint = currentPath(end, 1:2);
+            lineDir = endPoint - startPoint;
+            lineLength = norm(lineDir);
+            lineUnitDir = lineDir / max(lineLength, 1e-10);
+            
+            bsXY = baseStations(:, 1:2);
+            vecSB_all = bsXY - repmat(startPoint, size(baseStations, 1), 1);
+            projDistBS_all = vecSB_all * lineUnitDir';
+            projPoints_all = repmat(startPoint, size(baseStations, 1), 1) + projDistBS_all * lineUnitDir;
+            perpLen_all = sqrt(sum((bsXY - projPoints_all).^2, 2));
+        end
+        
         for wpIdx = 1:numWaypoints
             waypoint = currentPath(wpIdx, :);
             
@@ -410,31 +437,89 @@ if length(finalPopulation) >= 1
                 hasLOS = Problem.checkLineOfSight(waypoint, baseStations(bsIdx, :));
                 distances(bsIdx) = max(distances(bsIdx), 0.1);
                 if hasLOS
-                    % 视距（LOS）路径损耗模型
-                    pathLoss = 20*log10(distances(bsIdx)) + 61.4;  % dB
-                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;  % RSRP (dBm)
+                    pathLoss = 20*log10(distances(bsIdx)) + 61.4;
+                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;
                 else
-                    % 非视距（NLOS）路径损耗模型
-                    pathLoss = 40*log10(distances(bsIdx)) + 72;  % dB
-                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;  % RSRP (dBm)
+                    pathLoss = 40*log10(distances(bsIdx)) + 72;
+                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;
                 end
             end
             
             [~, bestBS] = max(signalStrengths);
             
-            if wpIdx == 1
-                connectedBS(wpIdx) = bestBS;
-                previousBS = bestBS;
-            else
-                currentConnectedSignal = signalStrengths(previousBS);
-                if currentConnectedSignal < Problem.getSwitchThreshold()
-                    % 当前连接基站信号低于阈值，切换到最强基站
-                    connectedBS(wpIdx) = bestBS;
-                    previousBS = bestBS;
-                else
-                    % 当前连接基站信号满足阈值，保持连接不变
-                    connectedBS(wpIdx) = previousBS;
-                end
+            % 根据switchMethod选择切换算法
+            switch switchMethod
+                case 0
+                    % 基于阈值的切换算法
+                    if wpIdx == 1
+                        connectedBS(wpIdx) = bestBS;
+                        previousBS = bestBS;
+                    else
+                        currentConnectedSignal = signalStrengths(previousBS);
+                        if currentConnectedSignal < Problem.getSwitchThreshold()
+                            connectedBS(wpIdx) = bestBS;
+                            previousBS = bestBS;
+                        else
+                            connectedBS(wpIdx) = previousBS;
+                        end
+                    end
+                    
+                case 1
+                    % CASH切换算法
+                    if wpIdx == 1
+                        connectedBS(wpIdx) = bestBS;
+                        previousBS = bestBS;
+                    else
+                        currentSignal = signalStrengths(previousBS);
+                        
+                        % 计算当前航点在直线L上的投影
+                        currentPoint = waypoint(1:2);
+                        vecSA = currentPoint - startPoint;
+                        projDist = dot(vecSA, lineUnitDir);
+                        
+                        % 构建候选集
+                        validMask = (projDistBS_all >= projDist) & (signalStrengths >= minSignalThreshold);
+                        candidateIdx = find(validMask);
+                        
+                        if ~isempty(candidateIdx)
+                            % 几何评分
+                            distances_to_A = projDistBS_all(candidateIdx) - projDist;
+                            perpLens = perpLen_all(candidateIdx);
+                            scores = distances_to_A ./ (1 + perpLens);
+                            
+                            [~, bestScoreIdx] = max(scores);
+                            targetBS = candidateIdx(bestScoreIdx);
+                            
+                            % 切换触发判断
+                            targetSignal = signalStrengths(targetBS);
+                            condition1 = targetSignal > currentSignal + hysteresisMargin;
+                            condition2 = currentSignal <= minSignalThreshold + delta;
+                            
+                            if condition1 || condition2
+                                connectedBS(wpIdx) = targetBS;
+                                previousBS = targetBS;
+                            else
+                                connectedBS(wpIdx) = previousBS;
+                            end
+                        else
+                            connectedBS(wpIdx) = previousBS;
+                        end
+                    end
+                    
+                otherwise
+                    % 默认使用基于阈值的切换算法
+                    if wpIdx == 1
+                        connectedBS(wpIdx) = bestBS;
+                        previousBS = bestBS;
+                    else
+                        currentConnectedSignal = signalStrengths(previousBS);
+                        if currentConnectedSignal < Problem.getSwitchThreshold()
+                            connectedBS(wpIdx) = bestBS;
+                            previousBS = bestBS;
+                        else
+                            connectedBS(wpIdx) = previousBS;
+                        end
+                    end
             end
         end
         

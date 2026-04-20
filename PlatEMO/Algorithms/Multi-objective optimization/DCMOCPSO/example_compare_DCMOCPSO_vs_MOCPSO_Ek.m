@@ -15,13 +15,14 @@ n = 5;
 
 % UAVPathPlanning parameters (same as example_DCMOCPSO requirement)
 N = 20;
-problemParameter = {20, 20, 5, -85, 0};
+problemParameter = {20, 20, 5, -85, 0, 30, 0};
 
 % DCMOCPSO settings
 maxFE_DCMOCPSO = 100;
+numSegments = 5;
 % param_DCMOCPSO: {numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk}
-param_DCMOCPSO_Full = {5, 2, 0.5, 0.3, true, true, true};
-param_DCMOCPSO_Base = {5, 2, 0.5, 0.3, false, false, false};
+param_DCMOCPSO_Full = {numSegments, 2, 0.5, 0.3, true, true, true};
+param_DCMOCPSO_Base = {numSegments, 2, 0.5, 0.3, false, false, false};
 param_DCMOCPSO_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
 
 % Result cache
@@ -42,7 +43,7 @@ cacheFile_DCMOCPSO_OneSeg = fullfile(cacheDir, 'DCMOCPSO_OneSeg_HV_runs.mat');
     'DCMOCPSO_Base', cacheFile_DCMOCPSO_Base, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter, param_DCMOCPSO_Base));
 
 % DCMOCPSO_OneSeg uses mean(actualFE) from DCMOCPSO_Full runs as maxFE
-maxFE_DCMOCPSO_OneSeg = round(mean(actualFE_DCMOCPSO_Full)/2);
+maxFE_DCMOCPSO_OneSeg = round(mean(actualFE_DCMOCPSO_Full)/numSegments);
 % maxFE_DCMOCPSO_OneSeg = 100;
 
 [hvLast_DCMOCPSO_OneSeg, hvSeries_DCMOCPSO_OneSeg, actualFE_DCMOCPSO_OneSeg, runtime_DCMOCPSO_OneSeg] = runOrLoad( ...

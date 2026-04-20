@@ -60,19 +60,14 @@ classdef UAVPathPlanning < PROBLEM
     end
     
     methods
-        %% 获取切换方法（公共方法）
-        function method = getSwitchMethod(obj)
-            method = obj.switchMethod;
+        %% 获取切换算法选择（公共方法）
+        function switchMethod = getSwitchMethod(obj)
+            switchMethod = obj.switchMethod;
         end
         
         %% 获取切换阈值（公共方法）
         function threshold = getSwitchThreshold(obj)
             threshold = obj.switchThreshold;
-        end
-        
-        %% 获取切换算法选择（公共方法）
-        function switchMethod = getSwitchMethod(obj)
-            switchMethod = obj.switchMethod;
         end
         
         %% 获取无人机发射功率（公共方法）
@@ -135,7 +130,10 @@ classdef UAVPathPlanning < PROBLEM
             %   switchThreshold: 切换阈值（dBm）
             %   obstacleMethod: 障碍物生成方法（固定为0，基于αβγ的方法，固定α=0.3, β=500, γ=40）
             %   P_tx: 无人机发射功率（dBm，默认为30dBm）
-            %   switchMethod: 切换算法选择（0=基于阈值的切换，默认0）
+            %   switchMethod: 切换算法选择
+            %       0 = 基于阈值的切换（当前连接基站信号 < 阈值时切换到最强基站）
+            %       1 = CASH切换算法（基于几何评分和迟滞余量）
+            %       默认值：0
             % 注意：不再需要numWaypoints参数，航点数量将自动计算
             if isempty(obj.parameter)
                 bsPerKm2 = 10;  % 默认每平方公里10个基站
@@ -805,11 +803,35 @@ classdef UAVPathPlanning < PROBLEM
             % waypoints: numWaypoints x 3 (x, y, z)
             % 根据 switchMethod 参数选择切换算法
             % switchMethod = 0: 基于阈值的切换（当前连接基站信号 < 阈值时切换到最强基站）
-            % switchMethod = 1: （未来可扩展的其他切换算法）
+            % switchMethod = 1: CASH切换算法（基于几何评分和迟滞余量）
             
             numWaypoints = size(waypoints, 1);
             switchCount = 0;
             previousBS = 0;  % 上一个航点连接的基站索引
+            
+            % CASH算法参数（只计算一次）
+            delta = 4;  % 安全裕度（dB）
+            minSignalThreshold = obj.switchThreshold;  % 最小可用信号阈值（dBm）
+            hysteresisMargin = 3;  % 迟滞余量（dB）
+            
+            % CASH算法预计算数据（只计算一次）
+            if obj.switchMethod == 1
+                % 起点到终点的直线L
+                startPoint = waypoints(1, 1:2);  % XY坐标
+                endPoint = waypoints(end, 1:2);  % XY坐标
+                lineDir = endPoint - startPoint;
+                lineLength = norm(lineDir);
+                lineUnitDir = lineDir / max(lineLength, 1e-10);  % 单位方向向量，避免除0
+                
+                % 预计算所有基站在直线L上的投影距离（只计算一次）
+                bsXY = obj.baseStations(:, 1:2);  % 所有基站的XY坐标
+                vecSB_all = bsXY - repmat(startPoint, obj.numBS, 1);
+                projDistBS_all = vecSB_all * lineUnitDir';  % 所有基站的投影距离
+                
+                % 预计算所有基站到直线L的垂直距离（只计算一次）
+                projPoints_all = repmat(startPoint, obj.numBS, 1) + projDistBS_all * lineUnitDir;
+                perpLen_all = sqrt(sum((bsXY - projPoints_all).^2, 2));
+            end
             
             for j = 1:numWaypoints
                 % 计算当前航点到所有基站的距离（3D距离）
@@ -857,6 +879,56 @@ classdef UAVPathPlanning < PROBLEM
                             end
                             % 否则：当前连接基站信号满足阈值，保持连接不变
                         end
+                        
+                    case 1
+                        % CASH切换算法
+                        if j == 1
+                            % 第一个航点：初始化连接为最强基站
+                            previousBS = bestBS;
+                        else
+                            currentSignal = signalStrengths(previousBS);
+                            
+                            % 步骤1：计算当前航点在直线L上的投影点A
+                            currentPoint = waypoints(j, 1:2);
+                            vecSA = currentPoint - startPoint;
+                            projDist = dot(vecSA, lineUnitDir);  % 投影距离
+                            
+                            % 步骤2：构建候选集（使用预计算的投影距离和垂直距离）
+                            % 仅保留投影点在A前方（靠终点更近）且RSRP >= 最小可用信号阈值的基站
+                            validMask = (projDistBS_all >= projDist) & (signalStrengths >= minSignalThreshold);
+                            candidateIdx = find(validMask);
+                            
+                            if ~isempty(candidateIdx)
+                                % 步骤3：几何评分（使用预计算的垂直距离）
+                                distances_to_A = projDistBS_all(candidateIdx) - projDist;
+                                perpLens = perpLen_all(candidateIdx);
+                                scores = distances_to_A ./ (1 + perpLens);
+                                
+                                % 选择几何评分最高的基站
+                                [~, bestScoreIdx] = max(scores);
+                                targetBS = candidateIdx(bestScoreIdx);
+                                
+                                % 步骤4：切换触发判断
+                                targetSignal = signalStrengths(targetBS);
+                                
+                                % 条件①：目标基站RSRP > 当前服务基站RSRP + 迟滞余量
+                                condition1 = targetSignal > currentSignal + hysteresisMargin;
+                                
+                                % 条件②：当前服务基站RSRP <= 最小阈值 + 安全裕度
+                                condition2 = currentSignal <= minSignalThreshold + delta;
+                                
+                                if condition1 || condition2
+                                    if targetBS ~= previousBS
+                                        switchCount = switchCount + 1;
+                                    end
+                                    previousBS = targetBS;
+                                end
+                            else
+                                % 没有候选基站，保持当前连接
+                                % previousBS 保持不变
+                            end
+                        end
+                        
                     otherwise
                         % 默认使用基于阈值的切换算法
                         warning('UAVPathPlanning:未知的切换算法 switchMethod=%d，使用默认的基于阈值的切换', obj.switchMethod);
