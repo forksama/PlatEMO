@@ -386,9 +386,8 @@ if length(finalPopulation) >= 1
     end
     
     % 为每个最优解创建单独图
-    % 获取切换算法参数
-    switchMethod = Problem.getSwitchMethod();
-    fprintf('当前切换算法: switchMethod = %d\n', switchMethod);
+    % 使用统一的 calculateSwitchDetails 方法获取切换详情
+    fprintf('当前切换算法: switchMethod = %d\n', Problem.getSwitchMethod());
     
     for pathIdx = 1:length(paths)
         currentPath = paths{pathIdx};
@@ -397,134 +396,15 @@ if length(finalPopulation) >= 1
         currentMarker = pathMarkers{pathIdx};
         currentPopObj = PopObj(pathIndices(pathIdx), :);
         
-        % 计算每个航点连接的基站（根据switchMethod选择算法）
-        numWaypoints = size(currentPath, 1);
-        connectedBS = zeros(numWaypoints, 1);
-        
         fprintf('计算 %s 的基站连接...\n', currentName);
         
-        % 使用与calculateSwitchCount相同的逻辑计算基站连接
-        previousBS = 0;
-        
-        % CASH算法参数（与calculateSwitchCount保持一致）
-        delta = 4;  % 安全裕度（dB）
-        minSignalThreshold = -110;  % 最小可用信号阈值（dBm）
-        hysteresisMargin = 3;  % 迟滞余量（dB）
-        
-        % CASH算法预计算数据
-        if switchMethod == 1
-            startPoint = currentPath(1, 1:2);
-            endPoint = currentPath(end, 1:2);
-            lineDir = endPoint - startPoint;
-            lineLength = norm(lineDir);
-            lineUnitDir = lineDir / max(lineLength, 1e-10);
-            
-            bsXY = baseStations(:, 1:2);
-            vecSB_all = bsXY - repmat(startPoint, size(baseStations, 1), 1);
-            projDistBS_all = vecSB_all * lineUnitDir';
-            projPoints_all = repmat(startPoint, size(baseStations, 1), 1) + projDistBS_all * lineUnitDir;
-            perpLen_all = sqrt(sum((bsXY - projPoints_all).^2, 2));
-        end
-        
-        for wpIdx = 1:numWaypoints
-            waypoint = currentPath(wpIdx, :);
-            
-            % 计算信号强度
-            distances = sqrt(sum((baseStations - repmat(waypoint, size(baseStations, 1), 1)).^2, 2));
-            signalStrengths = zeros(size(baseStations, 1), 1);
-            
-            for bsIdx = 1:size(baseStations, 1)
-                hasLOS = Problem.checkLineOfSight(waypoint, baseStations(bsIdx, :));
-                distances(bsIdx) = max(distances(bsIdx), 0.1);
-                if hasLOS
-                    pathLoss = 20*log10(distances(bsIdx)) + 61.4;
-                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;
-                else
-                    pathLoss = 40*log10(distances(bsIdx)) + 72;
-                    signalStrengths(bsIdx) = Problem.getTransmitPower() - pathLoss;
-                end
-            end
-            
-            [~, bestBS] = max(signalStrengths);
-            
-            % 根据switchMethod选择切换算法
-            switch switchMethod
-                case 0
-                    % 基于阈值的切换算法
-                    if wpIdx == 1
-                        connectedBS(wpIdx) = bestBS;
-                        previousBS = bestBS;
-                    else
-                        currentConnectedSignal = signalStrengths(previousBS);
-                        if currentConnectedSignal < Problem.getSwitchThreshold()
-                            connectedBS(wpIdx) = bestBS;
-                            previousBS = bestBS;
-                        else
-                            connectedBS(wpIdx) = previousBS;
-                        end
-                    end
-                    
-                case 1
-                    % CASH切换算法
-                    if wpIdx == 1
-                        connectedBS(wpIdx) = bestBS;
-                        previousBS = bestBS;
-                    else
-                        currentSignal = signalStrengths(previousBS);
-                        
-                        % 计算当前航点在直线L上的投影
-                        currentPoint = waypoint(1:2);
-                        vecSA = currentPoint - startPoint;
-                        projDist = dot(vecSA, lineUnitDir);
-                        
-                        % 构建候选集
-                        validMask = (projDistBS_all >= projDist) & (signalStrengths >= minSignalThreshold);
-                        candidateIdx = find(validMask);
-                        
-                        if ~isempty(candidateIdx)
-                            % 几何评分
-                            distances_to_A = projDistBS_all(candidateIdx) - projDist;
-                            perpLens = perpLen_all(candidateIdx);
-                            scores = distances_to_A ./ (1 + perpLens);
-                            
-                            [~, bestScoreIdx] = max(scores);
-                            targetBS = candidateIdx(bestScoreIdx);
-                            
-                            % 切换触发判断
-                            targetSignal = signalStrengths(targetBS);
-                            condition1 = targetSignal > currentSignal + hysteresisMargin;
-                            condition2 = currentSignal <= minSignalThreshold + delta;
-                            
-                            if condition1 || condition2
-                                connectedBS(wpIdx) = targetBS;
-                                previousBS = targetBS;
-                            else
-                                connectedBS(wpIdx) = previousBS;
-                            end
-                        else
-                            connectedBS(wpIdx) = previousBS;
-                        end
-                    end
-                    
-                otherwise
-                    % 默认使用基于阈值的切换算法
-                    if wpIdx == 1
-                        connectedBS(wpIdx) = bestBS;
-                        previousBS = bestBS;
-                    else
-                        currentConnectedSignal = signalStrengths(previousBS);
-                        if currentConnectedSignal < Problem.getSwitchThreshold()
-                            connectedBS(wpIdx) = bestBS;
-                            previousBS = bestBS;
-                        else
-                            connectedBS(wpIdx) = previousBS;
-                        end
-                    end
-            end
-        end
-        
-        % 直接使用算法结果的切换次数（不重新计算）
+        % 使用 calculateSwitchDetails 获取完整切换详情
+        switchDetails = Problem.calculateSwitchDetails(currentPath);
+        connectedBS = switchDetails.connectedBS;
         switchCount_current = currentPopObj(2);  % 直接从算法结果中获取
+        
+        % 获取航点数量（用于绘图）
+        numWaypoints = size(currentPath, 1);
         
         % 为基站分配颜色
         uniqueBSOrder = [];

@@ -805,30 +805,55 @@ classdef UAVPathPlanning < PROBLEM
             % switchMethod = 0: 基于阈值的切换（当前连接基站信号 < 阈值时切换到最强基站）
             % switchMethod = 1: CASH切换算法（基于几何评分和迟滞余量）
             
-            numWaypoints = size(waypoints, 1);
-            switchCount = 0;
-            previousBS = 0;  % 上一个航点连接的基站索引
+            % 调用 calculateSwitchDetails 获取完整详情，避免代码重复
+            details = obj.calculateSwitchDetails(waypoints);
+            switchCount = details.switchCount;
+        end
+        
+        %% 计算切换详情（用于绘图和可视化）
+        function details = calculateSwitchDetails(obj, waypoints)
+            %calculateSwitchDetails - 计算切换算法的完整详情
+            %
+            %   返回完整的切换信息，供可视化脚本使用，避免重复实现切换逻辑
+            %
+            %   输入：
+            %       waypoints - 航点坐标（numWaypoints x 3）
+            %
+            %   输出：
+            %       details - 包含以下字段的结构体：
+            %           .switchCount - 切换次数
+            %           .connectedBS - 每个航点连接的基站索引（numWaypoints x 1）
+            %           .signalStrengths - 每个航点的信号强度矩阵（numWaypoints x numBS）
+            %           .switchPoints - 切换发生的航点索引列表
+            %           .switchMethod - 使用的切换算法编号
             
-            % CASH算法参数（只计算一次）
+            numWaypoints = size(waypoints, 1);
+            
+            % 初始化输出
+            details.switchCount = 0;
+            details.connectedBS = zeros(numWaypoints, 1);
+            details.signalStrengths = zeros(numWaypoints, obj.numBS);
+            details.switchPoints = [];
+            details.switchMethod = obj.switchMethod;
+            
+            previousBS = 0;
+            
+            % CASH算法参数
             delta = 4;  % 安全裕度（dB）
             minSignalThreshold = obj.switchThreshold;  % 最小可用信号阈值（dBm）
             hysteresisMargin = 3;  % 迟滞余量（dB）
             
-            % CASH算法预计算数据（只计算一次）
+            % CASH算法预计算数据
             if obj.switchMethod == 1
-                % 起点到终点的直线L
-                startPoint = waypoints(1, 1:2);  % XY坐标
-                endPoint = waypoints(end, 1:2);  % XY坐标
+                startPoint = waypoints(1, 1:2);
+                endPoint = waypoints(end, 1:2);
                 lineDir = endPoint - startPoint;
                 lineLength = norm(lineDir);
-                lineUnitDir = lineDir / max(lineLength, 1e-10);  % 单位方向向量，避免除0
+                lineUnitDir = lineDir / max(lineLength, 1e-10);
                 
-                % 预计算所有基站在直线L上的投影距离（只计算一次）
-                bsXY = obj.baseStations(:, 1:2);  % 所有基站的XY坐标
+                bsXY = obj.baseStations(:, 1:2);
                 vecSB_all = bsXY - repmat(startPoint, obj.numBS, 1);
-                projDistBS_all = vecSB_all * lineUnitDir';  % 所有基站的投影距离
-                
-                % 预计算所有基站到直线L的垂直距离（只计算一次）
+                projDistBS_all = vecSB_all * lineUnitDir';
                 projPoints_all = repmat(startPoint, obj.numBS, 1) + projDistBS_all * lineUnitDir;
                 perpLen_all = sqrt(sum((bsXY - projPoints_all).^2, 2));
             end
@@ -837,110 +862,104 @@ classdef UAVPathPlanning < PROBLEM
                 % 计算当前航点到所有基站的距离（3D距离）
                 distances = sqrt(sum((obj.baseStations - repmat(waypoints(j,:), obj.numBS, 1)).^2, 2));
                 
-                % 计算信号强度（考虑视距/非视距）
-                % RSRP = P_tx - PathLoss
-                % P_tx: 无人机发射功率（dBm）
-                % PathLoss: 路径损耗（dB）
+                % 计算信号强度
                 signalStrengths = zeros(obj.numBS, 1);
                 for k = 1:obj.numBS
-                    % 检查是否有视距（LOS）
                     hasLOS = obj.checkLineOfSight(waypoints(j,:), obj.baseStations(k,:));
                     
                     distances(k) = max(distances(k), 0.1);
                     if hasLOS
-                        % 视距（LOS）路径损耗模型
-                        pathLoss = 20*log10(distances(k)) + 61.4;  % dB
-                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
+                        pathLoss = 20*log10(distances(k)) + 61.4;
+                        signalStrengths(k) = obj.P_tx - pathLoss;
                     else
-                        % 非视距（NLOS）路径损耗模型（更大的衰减）
-                        pathLoss = 40*log10(distances(k)) + 72;  % dB
-                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
+                        pathLoss = 40*log10(distances(k)) + 72;
+                        signalStrengths(k) = obj.P_tx - pathLoss;
                     end
                 end
                 
-                % 选择信号最强的基站
+                details.signalStrengths(j, :) = signalStrengths';
+                
                 [~, bestBS] = max(signalStrengths);
                 
-                % 根据 switchMethod 选择切换算法
+                % 根据切换算法计算
                 switch obj.switchMethod
                     case 0
-                        % 基于阈值的切换算法（原有逻辑）
+                        % 基于阈值的切换算法
                         if j == 1
-                            % 第一个航点：初始化连接为最强基站
+                            details.connectedBS(j) = bestBS;
                             previousBS = bestBS;
                         else
                             currentConnectedSignal = signalStrengths(previousBS);
                             if currentConnectedSignal < obj.switchThreshold
-                                % 当前连接基站信号低于阈值，执行切换到最强基站
                                 if bestBS ~= previousBS
-                                    switchCount = switchCount + 1;
+                                    details.switchCount = details.switchCount + 1;
+                                    details.switchPoints = [details.switchPoints, j];
                                 end
+                                details.connectedBS(j) = bestBS;
                                 previousBS = bestBS;
+                            else
+                                details.connectedBS(j) = previousBS;
                             end
-                            % 否则：当前连接基站信号满足阈值，保持连接不变
                         end
                         
                     case 1
                         % CASH切换算法
                         if j == 1
-                            % 第一个航点：初始化连接为最强基站
+                            details.connectedBS(j) = bestBS;
                             previousBS = bestBS;
                         else
                             currentSignal = signalStrengths(previousBS);
                             
-                            % 步骤1：计算当前航点在直线L上的投影点A
                             currentPoint = waypoints(j, 1:2);
                             vecSA = currentPoint - startPoint;
-                            projDist = dot(vecSA, lineUnitDir);  % 投影距离
+                            projDist = dot(vecSA, lineUnitDir);
                             
-                            % 步骤2：构建候选集（使用预计算的投影距离和垂直距离）
-                            % 仅保留投影点在A前方（靠终点更近）且RSRP >= 最小可用信号阈值的基站
                             validMask = (projDistBS_all >= projDist) & (signalStrengths >= minSignalThreshold);
                             candidateIdx = find(validMask);
                             
                             if ~isempty(candidateIdx)
-                                % 步骤3：几何评分（使用预计算的垂直距离）
                                 distances_to_A = projDistBS_all(candidateIdx) - projDist;
                                 perpLens = perpLen_all(candidateIdx);
                                 scores = distances_to_A ./ (1 + perpLens);
                                 
-                                % 选择几何评分最高的基站
                                 [~, bestScoreIdx] = max(scores);
                                 targetBS = candidateIdx(bestScoreIdx);
                                 
-                                % 步骤4：切换触发判断
                                 targetSignal = signalStrengths(targetBS);
-                                
-                                % 条件①：目标基站RSRP > 当前服务基站RSRP + 迟滞余量
                                 condition1 = targetSignal > currentSignal + hysteresisMargin;
-                                
-                                % 条件②：当前服务基站RSRP <= 最小阈值 + 安全裕度
                                 condition2 = currentSignal <= minSignalThreshold + delta;
                                 
                                 if condition1 || condition2
                                     if targetBS ~= previousBS
-                                        switchCount = switchCount + 1;
+                                        details.switchCount = details.switchCount + 1;
+                                        details.switchPoints = [details.switchPoints, j];
                                     end
+                                    details.connectedBS(j) = targetBS;
                                     previousBS = targetBS;
+                                else
+                                    details.connectedBS(j) = previousBS;
                                 end
                             else
-                                % 没有候选基站，保持当前连接
-                                % previousBS 保持不变
+                                details.connectedBS(j) = previousBS;
                             end
                         end
                         
                     otherwise
                         % 默认使用基于阈值的切换算法
-                        warning('UAVPathPlanning:未知的切换算法 switchMethod=%d，使用默认的基于阈值的切换', obj.switchMethod);
                         if j == 1
+                            details.connectedBS(j) = bestBS;
                             previousBS = bestBS;
                         else
                             currentConnectedSignal = signalStrengths(previousBS);
                             if currentConnectedSignal < obj.switchThreshold
                                 if bestBS ~= previousBS
-                                    switchCount = switchCount + 1;
+                                    details.switchCount = details.switchCount + 1;
+                                    details.switchPoints = [details.switchPoints, j];
                                 end
+                                details.connectedBS(j) = bestBS;
                                 previousBS = bestBS;
+                            else
+                                details.connectedBS(j) = previousBS;
                             end
                         end
                 end
