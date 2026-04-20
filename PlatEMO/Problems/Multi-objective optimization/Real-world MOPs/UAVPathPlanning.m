@@ -45,6 +45,7 @@ classdef UAVPathPlanning < PROBLEM
         numBS;           % 基站数量
         switchThreshold; % 切换阈值（dBm）
         switchMethod;    % 切换算法选择（0=基于阈值的切换，未来可扩展）
+        lookaheadDistance; % 前向展望距离（米），仅switchMethod=2时使用
         P_tx;            % 无人机发射功率（dBm）
         obstacleMethod;  % 障碍物与预设路径生成方法（固定为0，基于αβγ的方法）
         alpha;           % 城市密度比（建筑总面积与土地总面积的比值，0.1~0.5）
@@ -55,6 +56,7 @@ classdef UAVPathPlanning < PROBLEM
         presetWaypoints; % 预设航点位置（在预设路径上均匀分布，numWaypoints x 3）
         waypointSegmentMapping; % 航点到路径段的映射（numWaypoints x 1），每个值表示对应的路径段索引（1到numPresetPoints-1）
         xyBound; % XY平面边界约束（numPresetPoints-1 x 4），每行包含[kLower, cLower, kUpper, cUpper]，对应一个路径段
+        lookaheadScores; % 前瞻性评分缓存（numWaypoints x numBS），仅switchMethod=2时使用
         % coverageRadius不再使用固定值：覆盖半径取每个航点当前高度z（r = waypoint(3)）
         % coverageRadius; 
     end
@@ -123,7 +125,7 @@ classdef UAVPathPlanning < PROBLEM
             userUpper = obj.upper;
             
             % 获取参数（使用ParameterSet获取，如果obj.parameter被指定则使用，否则使用默认值）
-            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod}
+            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod, lookaheadDistance}
             %   bsPerKm2: 每平方公里的基站数量
             %   velocity: 无人机最大速度（m/s）
             %   TTT: 时间间隔（s）
@@ -133,7 +135,9 @@ classdef UAVPathPlanning < PROBLEM
             %   switchMethod: 切换算法选择
             %       0 = 基于阈值的切换（当前连接基站信号 < 阈值时切换到最强基站）
             %       1 = CASH切换算法（基于几何评分和迟滞余量）
+            %       2 = 前瞻性切换算法（基于预设路径的信号预测）
             %       默认值：0
+            %   lookaheadDistance: 前向展望距离（米），仅switchMethod=2时使用，默认500
             % 注意：不再需要numWaypoints参数，航点数量将自动计算
             if isempty(obj.parameter)
                 bsPerKm2 = 10;  % 默认每平方公里10个基站
@@ -170,6 +174,11 @@ classdef UAVPathPlanning < PROBLEM
                     else
                         switchMethod = 0;  % 默认使用基于阈值的切换
                     end
+                    if length(params) >= 8
+                        lookaheadDistance = params{8};  % 前向展望距离（米）
+                    else
+                        lookaheadDistance = 500;  % 默认500米
+                    end
                 else
                     bsPerKm2 = 10;  % 默认每平方公里10个基站
                     velocity = 10;
@@ -178,6 +187,7 @@ classdef UAVPathPlanning < PROBLEM
                     obstacleMethod = 0;
                     P_tx = 30;  % 默认发射功率30dBm
                     switchMethod = 0;  % 默认使用基于阈值的切换
+                    lookaheadDistance = 500;  % 默认500米
                 end
             end
             
@@ -192,6 +202,7 @@ classdef UAVPathPlanning < PROBLEM
             obj.obstacleMethod = obstacleMethod;
             obj.P_tx = P_tx;  % 保存无人机发射功率
             obj.switchMethod = switchMethod;  % 保存切换算法选择
+            obj.lookaheadDistance = lookaheadDistance;  % 保存前向展望距离
             
             % 覆盖半径不再使用固定值：覆盖半径取每个航点当前高度z（r = waypoint(3)）
             % 因此这里不再设置obj.coverageRadius
@@ -944,6 +955,39 @@ classdef UAVPathPlanning < PROBLEM
                             end
                         end
                         
+                    case 2
+                        % 前瞻性切换算法（基于预设路径的信号预测）
+                        if j == 1
+                            details.connectedBS(j) = bestBS;
+                            previousBS = bestBS;
+                        else
+                            currentSignal = signalStrengths(previousBS);
+                            
+                            % 检查是否需要切换
+                            if currentSignal < obj.switchThreshold
+                                % 找到当前实际航点对应的最近预设航点
+                                currentPoint = waypoints(j, 1:2);
+                                presetDistances = sqrt(sum((obj.presetWaypoints(:, 1:2) - repmat(currentPoint, size(obj.presetWaypoints, 1), 1)).^2, 2));
+                                [~, nearestPresetIdx] = min(presetDistances);
+                                
+                                % 预计算该预设航点的前瞻性评分
+                                lookaheadScores = obj.computeLookaheadScore(nearestPresetIdx);
+                                
+                                % 选择评分最高的基站
+                                [~, targetBS] = max(lookaheadScores);
+                                
+                                if targetBS ~= previousBS
+                                    details.switchCount = details.switchCount + 1;
+                                    details.switchPoints = [details.switchPoints, j];
+                                end
+                                details.connectedBS(j) = targetBS;
+                                previousBS = targetBS;
+                            else
+                                % 当前服务基站信号满足阈值，保持连接不变
+                                details.connectedBS(j) = previousBS;
+                            end
+                        end
+                        
                     otherwise
                         % 默认使用基于阈值的切换算法
                         if j == 1
@@ -962,6 +1006,108 @@ classdef UAVPathPlanning < PROBLEM
                                 details.connectedBS(j) = previousBS;
                             end
                         end
+                end
+            end
+        end
+        
+        %% 计算前瞻性评分（用于switchMethod=2）
+        function scores = computeLookaheadScore(obj, presetIdx)
+            %computeLookaheadScore - 计算给定预设航点的前瞻性基站评分
+            %
+            %   输入：
+            %       presetIdx - 预设航点索引
+            %
+            %   输出：
+            %       scores - 每个基站的加权和评分（1 x numBS）
+            
+            % 检查缓存是否已存在
+            if isempty(obj.lookaheadScores)
+                % 预计算所有预设航点的前瞻性评分
+                obj.lookaheadScores = obj.precomputeAllLookaheadScores();
+            end
+            
+            % 返回缓存的评分
+            scores = obj.lookaheadScores(presetIdx, :);
+        end
+        
+        %% 预计算所有预设航点的前瞻性评分（用于缓存）
+        function allScores = precomputeAllLookaheadScores(obj)
+            %precomputeAllLookaheadScores - 预计算所有预设航点的前瞻性评分
+            %
+            %   输出：
+            %       allScores - numWaypoints x numBS 的矩阵
+            
+            numPresetPoints = size(obj.presetWaypoints, 1);
+            allScores = zeros(numPresetPoints, obj.numBS);
+            
+            % 反比权重参数
+            epsilon = max(obj.lookaheadDistance * 0.1, 1);
+            
+            for i = 1:numPresetPoints
+                currentPoint = obj.presetWaypoints(i, 1:2);
+                
+                % 找到前向展望距离内的所有预设航点
+                futureIndices = [];
+                distances = [];
+                
+                for k = i:numPresetPoints
+                    dist = norm(obj.presetWaypoints(k, 1:2) - currentPoint);
+                    if dist <= obj.lookaheadDistance
+                        futureIndices = [futureIndices, k];
+                        distances = [distances, dist];
+                    else
+                        break;  % 预设航点是有序的，可以提前退出
+                    end
+                end
+                
+                if ~isempty(futureIndices)
+                    % 计算每个基站的加权和
+                    for bsIdx = 1:obj.numBS
+                        totalWeightedSignal = 0;
+                        totalWeight = 0;
+                        
+                        for k = 1:length(futureIndices)
+                            wpIdx = futureIndices(k);
+                            dist = distances(k);
+                            
+                            % 计算该未来航点的信号强度
+                            waypoint = obj.presetWaypoints(wpIdx, :);
+                            bsDist = norm(obj.baseStations(bsIdx, :) - waypoint);
+                            bsDist = max(bsDist, 0.1);
+                            
+                            % 检查视距
+                            hasLOS = obj.checkLineOfSight(waypoint, obj.baseStations(bsIdx, :));
+                            
+                            if hasLOS
+                                pathLoss = 20*log10(bsDist) + 61.4;
+                            else
+                                pathLoss = 40*log10(bsDist) + 72;
+                            end
+                            signalStrength = obj.P_tx - pathLoss;
+                            
+                            weight = 1 / (dist + epsilon);
+                            totalWeightedSignal = totalWeightedSignal + weight * signalStrength;
+                            totalWeight = totalWeight + weight;
+                        end
+                        
+                        if totalWeight > 0
+                            allScores(i, bsIdx) = totalWeightedSignal / totalWeight;
+                        end
+                    end
+                else
+                    % 如果没有未来航点，使用当前航点的信号强度
+                    for bsIdx = 1:obj.numBS
+                        bsDist = norm(obj.baseStations(bsIdx, :) - obj.presetWaypoints(i, :));
+                        bsDist = max(bsDist, 0.1);
+                        hasLOS = obj.checkLineOfSight(obj.presetWaypoints(i, :), obj.baseStations(bsIdx, :));
+                        
+                        if hasLOS
+                            pathLoss = 20*log10(bsDist) + 61.4;
+                        else
+                            pathLoss = 40*log10(bsDist) + 72;
+                        end
+                        allScores(i, bsIdx) = obj.P_tx - pathLoss;
+                    end
                 end
             end
         end
