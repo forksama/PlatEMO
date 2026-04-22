@@ -777,29 +777,8 @@ classdef UAVPathPlanning < PROBLEM
             totalSignal = 0;
             
             for j = 1:numWaypoints
-                % 计算当前航点到所有基站的距离（3D距离）
-                distances = sqrt(sum((obj.baseStations - repmat(waypoints(j,:), obj.numBS, 1)).^2, 2));
-                
-                % 计算信号强度（考虑视距/非视距）
-                % RSRP = P_tx - PathLoss
-                % P_tx: 无人机发射功率（dBm）
-                % PathLoss: 路径损耗（dB）
-                signalStrengths = zeros(obj.numBS, 1);
-                for k = 1:obj.numBS
-                    % 检查是否有视距（LOS）
-                    hasLOS = obj.checkLineOfSight(waypoints(j,:), obj.baseStations(k,:));
-                    
-                    distances(k) = max(distances(k), 0.1);
-                    if hasLOS
-                        % 视距（LOS）路径损耗模型
-                        pathLoss = 20*log10(distances(k)) + 61.4;  % dB
-                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
-                    else
-                        % 非视距（NLOS）路径损耗模型（更大的衰减）
-                        pathLoss = 40*log10(distances(k)) + 72;  % dB
-                        signalStrengths(k) = obj.P_tx - pathLoss;  % RSRP (dBm)
-                    end
-                end
+                % 计算当前航点到所有基站的信号强度（复用computeSignalStrengths）
+                signalStrengths = obj.computeSignalStrengths(waypoints(j,:));
                 
                 % 选择信号最强的基站
                 [maxSignal, ~] = max(signalStrengths);
@@ -870,23 +849,8 @@ classdef UAVPathPlanning < PROBLEM
             end
             
             for j = 1:numWaypoints
-                % 计算当前航点到所有基站的距离（3D距离）
-                distances = sqrt(sum((obj.baseStations - repmat(waypoints(j,:), obj.numBS, 1)).^2, 2));
-                
-                % 计算信号强度
-                signalStrengths = zeros(obj.numBS, 1);
-                for k = 1:obj.numBS
-                    hasLOS = obj.checkLineOfSight(waypoints(j,:), obj.baseStations(k,:));
-                    
-                    distances(k) = max(distances(k), 0.1);
-                    if hasLOS
-                        pathLoss = 20*log10(distances(k)) + 61.4;
-                        signalStrengths(k) = obj.P_tx - pathLoss;
-                    else
-                        pathLoss = 40*log10(distances(k)) + 72;
-                        signalStrengths(k) = obj.P_tx - pathLoss;
-                    end
-                end
+                % 计算当前航点到所有基站的信号强度（复用computeSignalStrengths）
+                signalStrengths = obj.computeSignalStrengths(waypoints(j,:));
                 
                 details.signalStrengths(j, :) = signalStrengths';
                 
@@ -1022,12 +986,41 @@ classdef UAVPathPlanning < PROBLEM
             
             % 检查缓存是否已存在
             if isempty(obj.lookaheadScores)
-                % 预计算所有预设航点的前瞻性评分
+                % 延迟预计算：只在首次需要时计算
+                fprintf('预计算前瞻性评分（switchMethod=2）...\n');
                 obj.lookaheadScores = obj.precomputeAllLookaheadScores();
+                fprintf('预计算完成，缓存大小: %d x %d\n', size(obj.lookaheadScores, 1), size(obj.lookaheadScores, 2));
             end
             
             % 返回缓存的评分
             scores = obj.lookaheadScores(presetIdx, :);
+        end
+        
+        %% 计算单个航点到所有基站的信号强度（可复用）
+        function signalStrengths = computeSignalStrengths(obj, waypoint)
+            %computeSignalStrengths - 计算单个航点到所有基站的信号强度
+            %
+            %   输入：
+            %       waypoint - 航点坐标（1 x 3）
+            %
+            %   输出：
+            %       signalStrengths - 每个基站的信号强度（numBS x 1）
+            
+            distances = sqrt(sum((obj.baseStations - repmat(waypoint, obj.numBS, 1)).^2, 2));
+            signalStrengths = zeros(obj.numBS, 1);
+            
+            for k = 1:obj.numBS
+                hasLOS = obj.checkLineOfSight(waypoint, obj.baseStations(k,:));
+                distances(k) = max(distances(k), 0.1);
+                
+                if hasLOS
+                    pathLoss = 20*log10(distances(k)) + 61.4;
+                    signalStrengths(k) = obj.P_tx - pathLoss;
+                else
+                    pathLoss = 40*log10(distances(k)) + 72;
+                    signalStrengths(k) = obj.P_tx - pathLoss;
+                end
+            end
         end
         
         %% 预计算所有预设航点的前瞻性评分（用于缓存）
@@ -1043,71 +1036,40 @@ classdef UAVPathPlanning < PROBLEM
             % 反比权重参数
             epsilon = max(obj.lookaheadDistance * 0.1, 1);
             
+            % 预计算所有预设航点间的距离矩阵（XY平面）
+            presetXY = obj.presetWaypoints(:, 1:2);  % numPresetPoints x 2
+            distMatrix = zeros(numPresetPoints, numPresetPoints);
             for i = 1:numPresetPoints
-                currentPoint = obj.presetWaypoints(i, 1:2);
-                
-                % 找到前向展望距离内的所有预设航点
-                futureIndices = [];
-                distances = [];
-                
                 for k = i:numPresetPoints
-                    dist = norm(obj.presetWaypoints(k, 1:2) - currentPoint);
-                    if dist <= obj.lookaheadDistance
-                        futureIndices = [futureIndices, k];
-                        distances = [distances, dist];
-                    else
-                        break;  % 预设航点是有序的，可以提前退出
-                    end
+                    d = norm(presetXY(k, :) - presetXY(i, :));
+                    distMatrix(i, k) = d;
+                    distMatrix(k, i) = d;  % 对称
                 end
+            end
+            
+            % 预计算所有预设航点到所有基站的信号强度矩阵
+            signalMatrix = zeros(numPresetPoints, obj.numBS);
+            for i = 1:numPresetPoints
+                signalMatrix(i, :) = obj.computeSignalStrengths(obj.presetWaypoints(i, :))';
+            end
+            
+            % 对每个预设航点计算前瞻性评分
+            for i = 1:numPresetPoints
+                % 找到前向展望距离内的所有预设航点
+                futureMask = distMatrix(i, :) <= obj.lookaheadDistance;
+                futureIndices = find(futureMask);
                 
                 if ~isempty(futureIndices)
-                    % 计算每个基站的加权和
-                    for bsIdx = 1:obj.numBS
-                        totalWeightedSignal = 0;
-                        totalWeight = 0;
-                        
-                        for k = 1:length(futureIndices)
-                            wpIdx = futureIndices(k);
-                            dist = distances(k);
-                            
-                            % 计算该未来航点的信号强度
-                            waypoint = obj.presetWaypoints(wpIdx, :);
-                            bsDist = norm(obj.baseStations(bsIdx, :) - waypoint);
-                            bsDist = max(bsDist, 0.1);
-                            
-                            % 检查视距
-                            hasLOS = obj.checkLineOfSight(waypoint, obj.baseStations(bsIdx, :));
-                            
-                            if hasLOS
-                                pathLoss = 20*log10(bsDist) + 61.4;
-                            else
-                                pathLoss = 40*log10(bsDist) + 72;
-                            end
-                            signalStrength = obj.P_tx - pathLoss;
-                            
-                            weight = 1 / (dist + epsilon);
-                            totalWeightedSignal = totalWeightedSignal + weight * signalStrength;
-                            totalWeight = totalWeight + weight;
-                        end
-                        
-                        if totalWeight > 0
-                            allScores(i, bsIdx) = totalWeightedSignal / totalWeight;
-                        end
-                    end
+                    futureDistances = distMatrix(i, futureIndices);  % 1 x numFuture
+                    weights = 1 ./ (futureDistances + epsilon);      % 1 x numFuture
+                    
+                    % 向量化计算所有基站的加权和
+                    % signalMatrix(futureIndices, :) 是 numFuture x numBS
+                    % weights 是 1 x numFuture，需要转置为 numFuture x 1 才能广播
+                    weightedSignals = signalMatrix(futureIndices, :) .* weights(:);  % numFuture x numBS
+                    allScores(i, :) = sum(weightedSignals, 1) / sum(weights);
                 else
-                    % 如果没有未来航点，使用当前航点的信号强度
-                    for bsIdx = 1:obj.numBS
-                        bsDist = norm(obj.baseStations(bsIdx, :) - obj.presetWaypoints(i, :));
-                        bsDist = max(bsDist, 0.1);
-                        hasLOS = obj.checkLineOfSight(obj.presetWaypoints(i, :), obj.baseStations(bsIdx, :));
-                        
-                        if hasLOS
-                            pathLoss = 20*log10(bsDist) + 61.4;
-                        else
-                            pathLoss = 40*log10(bsDist) + 72;
-                        end
-                        allScores(i, bsIdx) = obj.P_tx - pathLoss;
-                    end
+                    allScores(i, :) = signalMatrix(i, :);
                 end
             end
         end
