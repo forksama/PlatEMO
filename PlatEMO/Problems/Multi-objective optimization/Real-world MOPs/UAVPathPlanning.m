@@ -183,7 +183,7 @@ classdef UAVPathPlanning < PROBLEM
                     bsPerKm2 = 10;  % 默认每平方公里10个基站
                     velocity = 10;
                     TTT = 1;
-                    switchThreshold = -80;
+                    switchThreshold = -101.5;
                     obstacleMethod = 0;
                     P_tx = 30;  % 默认发射功率30dBm
                     switchMethod = 0;  % 默认使用基于阈值的切换
@@ -340,7 +340,7 @@ classdef UAVPathPlanning < PROBLEM
             end
             
             % 根据预设路径总长度和无人机速度自动计算航点数量
-            % 假设无人机以最大速度的0.8倍运动
+            % 假设无人机以最大速度的0.5倍运动
             actualVelocity = obj.velocity * 0.5;
             distancePerWaypoint = actualVelocity * obj.TTT;  % 每个航点之间的距离
             obj.numWaypoints = max(2, ceil(obj.pathLength / distancePerWaypoint));  % 至少2个航点
@@ -924,8 +924,28 @@ classdef UAVPathPlanning < PROBLEM
                         if j == 1
                             details.connectedBS(j) = bestBS;
                             previousBS = bestBS;
+                            currentSpeed = obj.velocity;  % 第一个航点使用最大速度作为默认
                         else
+                            % 计算当前速度（基于相邻航点距离和时间间隔）
+                            distPrev = norm(waypoints(j, 1:2) - waypoints(j-1, 1:2));
+                            currentSpeed = distPrev / obj.TTT;
+                            
                             currentSignal = signalStrengths(previousBS);
+                            
+                            % 计算动态迟滞余量
+                            % 公式：Δ = Δ0 * ((v_max - v_u) / v_max) * ((RSRP - RSRP_ref) / (RSRP_max - RSRP_ref)) + Δ_min
+                            % Δ0 = 10 dB, Δ_min = 1 dB
+                            % 速度越快 → 迟滞余量越小（切换更灵敏）
+                            % 信号越强 → 迟滞余量越大（抑制频繁切换）
+                            delta_hysteresis_range = 10;  % Δ0：迟滞余量范围（dB）
+                            delta_hysteresis_min = 1;     % Δ_min：最小迟滞余量（dB）
+                            RSRP_max = -31.4;             % 信号参考上限（dBm）
+                            RSRP_ref = -110;              % 信号参考下限（dBm）
+                            v_max = obj.velocity;         % 最大速度（m/s）
+                            
+                            speedFactor = max(0, (v_max - currentSpeed) / v_max);
+                            signalFactor = max(0, min(1, (currentSignal - RSRP_ref) / (RSRP_max - RSRP_ref)));
+                            dynamicHysteresis = delta_hysteresis_range * speedFactor * signalFactor + delta_hysteresis_min;
                             
                             % 检查是否需要切换
                             if currentSignal < obj.switchThreshold
@@ -934,18 +954,35 @@ classdef UAVPathPlanning < PROBLEM
                                 presetDistances = sqrt(sum((obj.presetWaypoints(:, 1:2) - repmat(currentPoint, size(obj.presetWaypoints, 1), 1)).^2, 2));
                                 [~, nearestPresetIdx] = min(presetDistances);
                                 
-                                % 预计算该预设航点的前瞻性评分
+                                % 获取该预设航点的前瞻性评分
                                 lookaheadScores = obj.computeLookaheadScore(nearestPresetIdx);
                                 
-                                % 选择评分最高的基站
+                                % 选择评分最高的基站作为切换目标
                                 [~, targetBS] = max(lookaheadScores);
                                 
-                                if targetBS ~= previousBS
-                                    details.switchCount = details.switchCount + 1;
-                                    details.switchPoints = [details.switchPoints, j];
+                                % 获取目标基站的信号强度
+                                targetSignal = signalStrengths(targetBS);
+                                
+                                % 迟滞判断：防止频繁切换（乒乓效应）
+                                % 条件①：目标信号 > 当前信号 + 动态迟滞余量
+                                condition1 = targetSignal > currentSignal + dynamicHysteresis;
+                                
+                                % 安全判断：当前信号过低时强制切换
+                                % 条件②：当前信号 ≤ 切换阈值 + 安全裕度
+                                condition2 = currentSignal <= obj.switchThreshold + delta;
+                                
+                                % 满足任一条件才执行切换
+                                if condition1 || condition2
+                                    if targetBS ~= previousBS
+                                        details.switchCount = details.switchCount + 1;
+                                        details.switchPoints = [details.switchPoints, j];
+                                    end
+                                    details.connectedBS(j) = targetBS;
+                                    previousBS = targetBS;
+                                else
+                                    % 不满足切换条件，保持当前连接
+                                    details.connectedBS(j) = previousBS;
                                 end
-                                details.connectedBS(j) = targetBS;
-                                previousBS = targetBS;
                             else
                                 % 当前服务基站信号满足阈值，保持连接不变
                                 details.connectedBS(j) = previousBS;
@@ -1507,7 +1544,7 @@ classdef UAVPathPlanning < PROBLEM
             % - 目标3（-coverageRatio）：最差情况覆盖率为0，所以-coverageRatio为0
             %   设置参考点为0.1（比0稍大一点），确保覆盖所有情况
             
-            R = [90, 15, 0];
+            R = [90, 30, 0];
             
             % 注意：如果HV仍然为0，可能是以下原因：
             % 1. 参考点仍然太小，实际解比参考点还差

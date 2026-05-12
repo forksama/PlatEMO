@@ -33,16 +33,22 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 %              40-60%迭代:  1.0x (标准)
 %              60-80%迭代:  0.75x
 %              80-100%迭代: 0.5x (强化收敛)
-Algorithm = DCMOCPSO('parameter', {1, 2, 0.5, 0.3, true, true});
+Algorithm = DCMOCPSO('parameter', {5, 2, 0.5, 0.3, true, true});
 
 % 创建UAVPathPlanning问题
-% 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod}
+% 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod, lookaheadDistance}
 %   bsPerKm2: 每平方公里的基站数量
 %   velocity: 无人机最大速度（m/s）
 %   TTT: 时间间隔（s）
 %   switchThreshold: 切换阈值（dBm）
 %   obstacleMethod: 障碍物生成方法（0=default）
-Problem = UAVPathPlanning('N', 20, 'maxFE', 40, 'parameter', {20, 20, 5, -101.5, 0, 30, 1});
+%   P_tx: 无人机发射功率（dBm）
+%   switchMethod: 切换算法选择
+%       0 = 基于阈值的切换
+%       1 = CASH切换算法
+%       2 = 前瞻性切换算法（基于预设路径的信号预测）
+%   lookaheadDistance: 前向展望距离（米），仅switchMethod=2时使用
+Problem = UAVPathPlanning('N', 20, 'maxFE', 100, 'parameter', {20, 20, 5, -101.5, 0, 30, 1, 500});
 
 fprintf('问题设置：\n');
 fprintf('  航点数量: %d\n', Problem.D / 3);
