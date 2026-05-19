@@ -3,12 +3,13 @@
 % Algorithm-level comparison on UAVPathPlanning.
 %
 % Groups:
-% 1) LMOCSO      : competitor algorithm, requested as LMOCSO
-% 2) DCMOCPSO    : improved algorithm, reusing Full_Lookahead_HV_runs.mat
-% 3) Base-MOCPSO : baseline represented by OneSeg_Lookahead_HV_runs.mat
-% 4) MMOPSO      : competitor algorithm
-% 5) IMMOEAD     : competitor algorithm
-% 6) DGEA        : competitor algorithm
+% 1) DCMOCPSO    : improved algorithm, reusing Full_Lookahead_HV_runs.mat
+% 2) Base-MOCPSO : baseline represented by OneSeg_Lookahead_HV_runs.mat
+% 3) IMMOEAD     : competitor algorithm
+% 4) DGEA        : competitor algorithm
+%
+% Disabled:
+% - MMOPSO       : competitor algorithm
 %
 % The old DCMOCPSO/Base-MOCPSO cache files are loaded by default and are not
 % recomputed unless allowRunCachedGroups is set to true.
@@ -16,11 +17,18 @@
 clear; clc; close all;
 
 %% Settings
-n = 5;
+n = 10;
 
 % Set this to true only if the old cached groups are missing and you really
 % want to recompute them. Recomputing can take several hours.
-allowRunCachedGroups = false;
+allowRunCachedGroups = true;
+
+% Start and warm up the parallel pool before per-run timing begins, so the
+% parpool startup cost is not counted in any algorithm runtime.
+enableParallelPool = true;
+parallelPoolProfile = 'Processes';
+parallelPoolNumWorkers = [];
+prepareParallelPool(enableParallelPool, parallelPoolProfile, parallelPoolNumWorkers);
 
 % UAVPathPlanning parameters shared by all groups.
 N = 20;
@@ -41,8 +49,7 @@ end
 
 cacheFile_DCMOCPSO    = fullfile(cacheDir, 'Full_Lookahead_HV_runs.mat');
 cacheFile_BaseMOCPSO  = fullfile(cacheDir, 'OneSeg_Lookahead_HV_runs.mat');
-cacheFile_LMOCSO      = fullfile(cacheDir, 'LMOCSO_HV_runs.mat');
-cacheFile_MMOPSO      = fullfile(cacheDir, 'MMOPSO_HV_runs.mat');
+% cacheFile_MMOPSO      = fullfile(cacheDir, 'MMOPSO_HV_runs.mat');
 cacheFile_IMMOEAD     = fullfile(cacheDir, 'IMMOEAD_HV_runs.mat');
 cacheFile_DGEA        = fullfile(cacheDir, 'DGEA_HV_runs.mat');
 
@@ -64,6 +71,11 @@ else
     maxFE_BaseMOCPSO = max(1, round(competitorMaxFE / numSegments));
 end
 
+[hvLast_BaseMOCPSO, hvSeries_BaseMOCPSO, actualFE_BaseMOCPSO, runtime_BaseMOCPSO] = runOrLoad( ...
+    'Base-MOCPSO', cacheFile_BaseMOCPSO, n, ...
+    @() runOneAlgorithm(@() DCMOCPSO('parameter', param_OneSeg), N, maxFE_BaseMOCPSO, problemParameter_Lookahead), ...
+    allowRunCachedGroups);
+
 [hvLast_DGEA, hvSeries_DGEA, actualFE_DGEA, runtime_DGEA] = runOrLoad( ...
     'DGEA', cacheFile_DGEA, n, ...
     @() runOneAlgorithm(@() DGEA(), N, competitorMaxFE, problemParameter_Lookahead), ...
@@ -74,27 +86,17 @@ end
     @() runOneAlgorithm(@() IMMOEAD(), N, competitorMaxFE, problemParameter_Lookahead), ...
     true);
 
-[hvLast_LMOCSO, hvSeries_LMOCSO, actualFE_LMOCSO, runtime_LMOCSO] = runOrLoad( ...
-    'LMOCSO', cacheFile_LMOCSO, n, ...
-    @() runOneAlgorithm(@() LMOCSO(), N, competitorMaxFE, problemParameter_Lookahead), ...
-    true);
-
-[hvLast_MMOPSO, hvSeries_MMOPSO, actualFE_MMOPSO, runtime_MMOPSO] = runOrLoad( ...
-    'MMOPSO', cacheFile_MMOPSO, n, ...
-    @() runOneAlgorithm(@() MMOPSO(), N, competitorMaxFE, problemParameter_Lookahead), ...
-    true);
-
-[hvLast_BaseMOCPSO, hvSeries_BaseMOCPSO, actualFE_BaseMOCPSO, runtime_BaseMOCPSO] = runOrLoad( ...
-    'Base-MOCPSO', cacheFile_BaseMOCPSO, n, ...
-    @() runOneAlgorithm(@() DCMOCPSO('parameter', param_OneSeg), N, maxFE_BaseMOCPSO, problemParameter_Lookahead), ...
-    allowRunCachedGroups);
+% [hvLast_MMOPSO, hvSeries_MMOPSO, actualFE_MMOPSO, runtime_MMOPSO] = runOrLoad( ...
+%     'MMOPSO', cacheFile_MMOPSO, n, ...
+%     @() runOneAlgorithm(@() MMOPSO(), N, competitorMaxFE, problemParameter_Lookahead), ...
+%     true);
 
 %% Summary
-groupNames = {'LMOCSO', 'DCMOCPSO', 'Base-MOCPSO', 'MMOPSO', 'IMMOEAD', 'DGEA'};
-hvLastAll = {hvLast_LMOCSO, hvLast_DCMOCPSO, hvLast_BaseMOCPSO, hvLast_MMOPSO, hvLast_IMMOEAD, hvLast_DGEA};
-actualFEAll = {actualFE_LMOCSO, actualFE_DCMOCPSO, actualFE_BaseMOCPSO, actualFE_MMOPSO, actualFE_IMMOEAD, actualFE_DGEA};
-runtimeAll = {runtime_LMOCSO, runtime_DCMOCPSO, runtime_BaseMOCPSO, runtime_MMOPSO, runtime_IMMOEAD, runtime_DGEA};
-maxFEAll = [competitorMaxFE, maxFE_DCMOCPSO, maxFE_BaseMOCPSO, competitorMaxFE, competitorMaxFE, competitorMaxFE];
+groupNames = {'DCMOCPSO', 'Base-MOCPSO', 'IMMOEAD', 'DGEA'};
+hvLastAll = {hvLast_DCMOCPSO, hvLast_BaseMOCPSO, hvLast_IMMOEAD, hvLast_DGEA};
+actualFEAll = {actualFE_DCMOCPSO, actualFE_BaseMOCPSO, actualFE_IMMOEAD, actualFE_DGEA};
+runtimeAll = {runtime_DCMOCPSO, runtime_BaseMOCPSO, runtime_IMMOEAD, runtime_DGEA};
+maxFEAll = [maxFE_DCMOCPSO, maxFE_BaseMOCPSO, competitorMaxFE, competitorMaxFE];
 
 meanHV = nan(1, numel(groupNames));
 meanRuntime = nan(1, numel(groupNames));
@@ -116,10 +118,8 @@ end
 
 %% Plot comparisons
 colors = [
-    0.45, 0.35, 0.80;  % LMOCSO
     0.20, 0.40, 0.80;  % DCMOCPSO
     0.90, 0.60, 0.10;  % Base-MOCPSO
-    0.20, 0.70, 0.30;  % MMOPSO
     0.35, 0.55, 0.70;  % IMMOEAD
     0.75, 0.35, 0.20   % DGEA
 ];
@@ -216,6 +216,35 @@ function actualFE = loadAllActualFE(cacheFile)
             actualFE(end+1) = runs(i).actualFE; %#ok<AGROW>
         end
     end
+end
+
+function prepareParallelPool(enableParallelPool, poolProfile, numWorkers)
+    if ~enableParallelPool
+        return;
+    end
+
+    if isempty(ver('parallel'))
+        fprintf('[Parallel] Parallel Computing Toolbox is unavailable; parfor will run serially.\n');
+        return;
+    end
+
+    pool = gcp('nocreate');
+    if isempty(pool)
+        fprintf('[Parallel] Starting parallel pool before algorithm timing...\n');
+        if isempty(numWorkers)
+            pool = parpool(poolProfile);
+        else
+            pool = parpool(poolProfile, numWorkers);
+        end
+    else
+        fprintf('[Parallel] Reusing existing parallel pool with %d worker(s).\n', pool.NumWorkers);
+    end
+
+    warmup = zeros(1, pool.NumWorkers);
+    parfor i = 1:pool.NumWorkers
+        warmup(i) = i;
+    end
+    fprintf('[Parallel] Pool ready with %d worker(s).\n', pool.NumWorkers);
 end
 
 function [hv, actualFE, runtime, Algorithm, Problem] = runOneAlgorithm(createAlgorithmFn, N, maxFE, problemParameter)

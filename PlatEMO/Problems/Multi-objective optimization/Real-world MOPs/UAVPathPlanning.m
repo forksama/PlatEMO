@@ -601,9 +601,10 @@ classdef UAVPathPlanning < PROBLEM
             segmentMapping = obj.getWaypointSegmentMapping();
             numPresetPoints = size(obj.presetPath, 1);
             
-            for i = 1:N
+            parfor i = 1:N
                 % 提取航点坐标（3D：x, y, z）
                 waypoints = reshape(PopDec(i,:), 3, numWaypoints)';  % numWaypoints x 3
+                rowCon = zeros(1, numConstraints);
                 
                 % 固定第一个和最后一个航点为预设路径的起点和终点
                 waypoints(1, :) = obj.presetPath(1, :);  % 第一个航点 = 预设路径起点
@@ -648,10 +649,10 @@ classdef UAVPathPlanning < PROBLEM
                         
                         % 若跨段，只要与任意一段方向点积>=0，则视为满足约束
                         maxDotProduct = max(dotProductJ, dotProductJNext);
-                        PopCon(i, constraintIdx) = max(0, -maxDotProduct);
+                        rowCon(constraintIdx) = max(0, -maxDotProduct);
                     else
                         % 若未跨段，则仍按当前段方向判断
-                        PopCon(i, constraintIdx) = max(0, -dotProductJ);
+                        rowCon(constraintIdx) = max(0, -dotProductJ);
                     end
                     
                     constraintIdx = constraintIdx + 1;
@@ -665,7 +666,7 @@ classdef UAVPathPlanning < PROBLEM
                     waypoint = waypoints(j, :);
                     violation = obj.checkWaypointInObstacle(waypoint);
                     % 确保违反度非负（虽然checkWaypointInObstacle应该返回非负值，但为了保险起见）
-                    PopCon(i, constraintIdx) = max(0, violation);
+                    rowCon(constraintIdx) = max(0, violation);
                     constraintIdx = constraintIdx + 1;
                 end
                 
@@ -676,7 +677,7 @@ classdef UAVPathPlanning < PROBLEM
                     
                     violation = obj.checkSegmentIntersectsObstacle(currentWP, nextWP);
                     % 确保违反度非负（虽然checkSegmentIntersectsObstacle应该返回非负值，但为了保险起见）
-                    PopCon(i, constraintIdx) = max(0, violation);
+                    rowCon(constraintIdx) = max(0, violation);
                     constraintIdx = constraintIdx + 1;
                 end
                 
@@ -727,10 +728,10 @@ classdef UAVPathPlanning < PROBLEM
                             end
                         end
                         
-                        PopCon(i, constraintIdx) = max(0, violation);
+                        rowCon(constraintIdx) = max(0, violation);
                     else
                         % 如果没有定义xyBound或索引超出范围，约束违反度为0
-                        PopCon(i, constraintIdx) = 0;
+                        rowCon(constraintIdx) = 0;
                     end
                     constraintIdx = constraintIdx + 1;
                 end
@@ -739,6 +740,7 @@ classdef UAVPathPlanning < PROBLEM
                 % if constraintIdx - 1 ~= numConstraints
                 %     warning('UAVPathPlanning:CalCon', '约束数量不匹配！期望 %d，实际 %d', numConstraints, constraintIdx - 1);
                 % end
+                PopCon(i, :) = rowCon;
             end
         end
         
@@ -747,8 +749,15 @@ classdef UAVPathPlanning < PROBLEM
             [N, D] = size(PopDec);
             numWaypoints = D / 3;
             PopObj = zeros(N, obj.M);
+
+            if obj.switchMethod == 2 && isempty(obj.lookaheadScores)
+                fprintf('预计算前瞻性评分（switchMethod=2）...\n');
+                obj.lookaheadScores = obj.precomputeAllLookaheadScores();
+                fprintf('预计算完成，缓存大小: %d x %d\n', size(obj.lookaheadScores, 1), size(obj.lookaheadScores, 2));
+            end
             
-            for i = 1:N
+            parfor i = 1:N
+                rowObj = zeros(1, obj.M);
                 % 提取航点坐标（3D：x, y, z）
                 waypoints = reshape(PopDec(i,:), 3, numWaypoints)';  % numWaypoints x 3
                 
@@ -758,15 +767,16 @@ classdef UAVPathPlanning < PROBLEM
                 
                 % 目标1：最大化平均信号强度（转换为最小化负的平均信号强度）
                 avgSignal = obj.calculateAverageSignal(waypoints);
-                PopObj(i, 1) = -avgSignal;  % 取负值，因为要最小化
+                rowObj(1) = -avgSignal;
                 
                 % 目标2：最小化切换次数
                 switchCount = obj.calculateSwitchCount(waypoints);
-                PopObj(i, 2) = switchCount;
+                rowObj(2) = switchCount;
                 
                 % 目标3：最大化路径覆盖率（转换为最小化负的覆盖率）
                 coverageRatio = obj.calculatePathCoverageRatio(waypoints);
-                PopObj(i, 3) = -coverageRatio;  % 取负值，因为要最小化
+                rowObj(3) = -coverageRatio;
+                PopObj(i, :) = rowObj;
             end
         end
         

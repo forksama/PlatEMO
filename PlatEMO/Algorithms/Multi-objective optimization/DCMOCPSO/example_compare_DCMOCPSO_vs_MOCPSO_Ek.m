@@ -12,7 +12,7 @@
 clear; clc; close all;
 
 %% Settings
-n = 30;
+n = 10;
 
 % UAVPathPlanning parameters
 N = 20;
@@ -42,22 +42,30 @@ cacheFile_Full_Lookahead   = fullfile(cacheDir, 'Full_Lookahead_HV_runs.mat');
 
 % 4) Full_Lookahead: Full配置+前瞻性切换算法（先运行，用于计算单段配置的maxFE）
 [hvLast_Full_Lookahead, hvSeries_Full_Lookahead, actualFE_Full_Lookahead, runtime_Full_Lookahead, Algorithm_Full_Lookahead, Problem_Full_Lookahead] = runOrLoad( ...
-    'Full_Lookahead', cacheFile_Full_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Full));
+    'Full_Lookahead', cacheFile_Full_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Full), true);
 
 % OneSeg的maxFE基于Full_Lookahead的实际FE按段均分（确保公平对比）
-maxFE_OneSeg = round(mean(actualFE_Full_Lookahead(~isnan(actualFE_Full_Lookahead))) / numSegments);
+validFE_Full_Lookahead = loadAllActualFE(cacheFile_Full_Lookahead);
+if isempty(validFE_Full_Lookahead)
+    validFE_Full_Lookahead = actualFE_Full_Lookahead(~isnan(actualFE_Full_Lookahead));
+end
+if isempty(validFE_Full_Lookahead)
+    maxFE_OneSeg = maxFE_DCMOCPSO;
+else
+    maxFE_OneSeg = max(1, round(mean(validFE_Full_Lookahead) / numSegments));
+end
 
 % 3) Seg_Lookahead: 添加分段算法（Base配置）+前瞻性切换算法
 [hvLast_Seg_Lookahead, hvSeries_Seg_Lookahead, actualFE_Seg_Lookahead, runtime_Seg_Lookahead, Algorithm_Seg_Lookahead, Problem_Seg_Lookahead] = runOrLoad( ...
-    'Seg_Lookahead', cacheFile_Seg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Seg));
+    'Seg_Lookahead', cacheFile_Seg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Seg), true);
 
 % 1) OneSeg: 基准（单段+无增强+switchMethod=0）
 [hvLast_OneSeg, hvSeries_OneSeg, actualFE_OneSeg, runtime_OneSeg, Algorithm_OneSeg, Problem_OneSeg] = runOrLoad( ...
-    'OneSeg', cacheFile_OneSeg, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Base, param_OneSeg));
+    'OneSeg', cacheFile_OneSeg, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Base, param_OneSeg), true);
 
 % 2) OneSeg_Lookahead: OneSeg基础上使用前瞻性切换算法
 [hvLast_OneSeg_Lookahead, hvSeries_OneSeg_Lookahead, actualFE_OneSeg_Lookahead, runtime_OneSeg_Lookahead, Algorithm_OneSeg_Lookahead, Problem_OneSeg_Lookahead] = runOrLoad( ...
-    'OneSeg_Lookahead', cacheFile_OneSeg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Lookahead, param_OneSeg));
+    'OneSeg_Lookahead', cacheFile_OneSeg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Lookahead, param_OneSeg), true);
 
 %% Score（忽略NaN）
 validIdx_OneSeg           = ~isnan(hvLast_OneSeg);
@@ -143,7 +151,7 @@ grid on;
 
 
 %% ===================== local functions =====================
-function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn)
+function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
     hvLast = nan(1,n);
     hvSeries = cell(1,n);
     actualFE = nan(1,n);
@@ -155,24 +163,47 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
         S = load(cacheFile);
         if isfield(S, 'runs')
             runs = S.runs;
-            if numel(runs) >= n
-                fprintf('[%s] load %d run(s) from cache: %s\n', algName, n, cacheFile);
-                for i = 1:n
+            loadCount = min(numel(runs), n);
+            fprintf('[%s] load %d/%d run(s) from cache: %s\n', algName, loadCount, n, cacheFile);
+            for i = 1:loadCount
+                if isfield(runs, 'hv') && ~isempty(runs(i).hv)
                     hvSeries{i} = runs(i).hv;
-                    hvLast(i)   = runs(i).hv(end);
-                    actualFE(i) = runs(i).actualFE;
-                    if isfield(runs, 'runtime')
-                        runtime(i) = runs(i).runtime;
-                    end
+                    hvLast(i) = runs(i).hv(end);
                 end
+                if isfield(runs, 'actualFE')
+                    actualFE(i) = runs(i).actualFE;
+                end
+                if isfield(runs, 'runtime')
+                    runtime(i) = runs(i).runtime;
+                end
+            end
+            if loadCount >= n
                 return;
             end
         end
     end
 
-    fprintf('[%s] cache miss -> run %d time(s)\n', algName, n);
+    if ~allowRun
+        fprintf('[%s] cache is missing or incomplete, and recomputation is disabled. Missing runs remain NaN.\n', algName);
+        return;
+    end
+
+    startRun = find(isnan(hvLast), 1);
+    if isempty(startRun)
+        return;
+    end
+
+    fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
     runs = struct('hv', {}, 'actualFE', {}, 'runtime', {});
-    for i = 1:n
+    if exist(cacheFile, 'file') == 2
+        S = load(cacheFile);
+        if isfield(S, 'runs')
+            runs = S.runs;
+        end
+    end
+
+    for i = startRun:n
+        fprintf('\n>>> Current algorithm: %s\n', algName);
         fprintf('  Run %d/%d...\n', i, n);
         try
             [hvSeries{i}, actualFE(i), runtime(i), lastAlgorithm, lastProblem] = runOneFn();
@@ -180,12 +211,31 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
             runs(i).hv = hvSeries{i};
             runs(i).actualFE = actualFE(i);
             runs(i).runtime = runtime(i);
+            save(cacheFile, 'runs');
         catch ME
             fprintf('  Run %d/%d FAILED: %s\n', i, n, ME.message);
             % 保留 NaN 值，继续运行下一次
         end
     end
-    save(cacheFile, 'runs');
+end
+
+function actualFE = loadAllActualFE(cacheFile)
+    actualFE = [];
+    if exist(cacheFile, 'file') ~= 2
+        return;
+    end
+
+    S = load(cacheFile);
+    if ~isfield(S, 'runs')
+        return;
+    end
+
+    runs = S.runs;
+    for i = 1:numel(runs)
+        if isfield(runs, 'actualFE') && ~isempty(runs(i).actualFE) && ~isnan(runs(i).actualFE)
+            actualFE(end+1) = runs(i).actualFE; %#ok<AGROW>
+        end
+    end
 end
 
 function [hv, actualFE, runtime, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, param_DCMOCPSO)
