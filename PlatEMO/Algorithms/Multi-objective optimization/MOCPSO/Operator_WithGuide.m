@@ -34,11 +34,13 @@ function [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Loser1, Loser
     Loser1Dec = Loser1.decs;
     Loser2Dec = Loser2.decs;
     WinnerDec = Winner.decs;
-    [N, D] = size(Loser1Dec);
+    [N1, D] = size(Loser1Dec);
+    [N2, ~] = size(Loser2Dec);
+    [NW, ~] = size(WinnerDec);
     
-    Loser1Vel = Loser1.adds(zeros(N, D));
-    Loser2Vel = Loser2.adds(zeros(N, D));
-    WinnerVel = Winner.adds(zeros(N, D));
+    Loser1Vel = Loser1.adds(zeros(N1, D));
+    Loser2Vel = Loser2.adds(zeros(N2, D));
+    WinnerVel = Winner.adds(zeros(NW, D));
     
     %% 更新操作（带引导粒子）
     % Winner: 保持纯DSS（不加引导，避免自我强化）
@@ -65,9 +67,9 @@ function [Offspring1, Offspring2, Offspring3] = Operator_WithGuide(Loser1, Loser
     WinOffVel = [WinOffVel; WinnerVel];
     
     %% 多项式变异（使用动态变异率）
-    Offspring1 = Polynomial_mutation(Problem, Loser1OffDec, Loser1OffVel, N, D, mutationRateMultiplier);
-    Offspring2 = Polynomial_mutation(Problem, Loser2OffDec, Loser2OffVel, N, D, mutationRateMultiplier);
-    Offspring3 = Polynomial_mutation(Problem, WinOffDec, WinOffVel, N, D, mutationRateMultiplier);
+    Offspring1 = Polynomial_mutation(Problem, Loser1OffDec, Loser1OffVel, size(Loser1OffDec, 1), D, mutationRateMultiplier);
+    Offspring2 = Polynomial_mutation(Problem, Loser2OffDec, Loser2OffVel, size(Loser2OffDec, 1), D, mutationRateMultiplier);
+    Offspring3 = Polynomial_mutation(Problem, WinOffDec, WinOffVel, size(WinOffDec, 1), D, mutationRateMultiplier);
 end
 
 %% CV_Func_WithGuide - 收敛策略（带引导粒子）
@@ -75,7 +77,7 @@ function [OutVel, OutDec] = CV_Func_WithGuide(Loser, Winner, GuideDec, c_guide, 
     LoserDec = Loser.decs;
     [N, D] = size(LoserDec);
     LoserVel = Loser.adds(zeros(N, D));
-    WinnerDec = Winner.decs;
+    WinnerDec = matchRows(Winner.decs, N);
     
     if size(LoserVel, 1) == 0
         OutVel = LoserVel;
@@ -112,7 +114,7 @@ function [OutVel, OutDec] = DV_Func_WithGuide(Loser, Winner, GuideDec, c_guide, 
     LoserDec = Loser.decs;
     [N, D] = size(LoserDec);
     LoserVel = Loser.adds(zeros(N, D));
-    WinnerDec = Winner.decs;
+    WinnerDec = matchRows(Winner.decs, N);
     
     if size(LoserVel, 1) == 0
         OutVel = LoserVel;
@@ -146,12 +148,14 @@ function [OutVel, OutDec] = DV_Func_WithGuide(Loser, Winner, GuideDec, c_guide, 
     r3 = repmat(rand(N, 1), 1, D);
     
     % 随机探索范围
+    lower = Problem.lower(:)';
+    upper = Problem.upper(:)';
     max_tmp = max(LoserDec + 0.5, [], 2);
     min_tmp = min(LoserDec .* 0.1, [], 2);
-    max_tmp = min(max_tmp, Problem.upper);
-    min_tmp = max(min_tmp, Problem.lower);
+    max_tmp = min(repmat(max_tmp, 1, D), repmat(upper, N, 1));
+    min_tmp = max(repmat(min_tmp, 1, D), repmat(lower, N, 1));
     
-    xr = unifrnd(repmat(min_tmp, 1, 1), repmat(max_tmp, 1, 1));
+    xr = unifrnd(min_tmp, max_tmp);
     
     % 原始速度更新
     OffVel = c1*r1.*LoserVel + c2*r2.*(WinnerDec - LoserDec) + c3.*(xr - LoserDec) + c4*r3.*(LoserDec - TmpDec);
@@ -167,4 +171,19 @@ function [OutVel, OutDec] = DV_Func_WithGuide(Loser, Winner, GuideDec, c_guide, 
     
     OutDec = OffDec;
     OutVel = OffVel;
+end
+
+function Matched = matchRows(Source, N)
+    if isempty(Source) || N == 0
+        Matched = Source;
+        return;
+    end
+
+    sourceN = size(Source, 1);
+    if sourceN == N
+        Matched = Source;
+    else
+        idx = mod(0:N-1, sourceN) + 1;
+        Matched = Source(idx, :);
+    end
 end

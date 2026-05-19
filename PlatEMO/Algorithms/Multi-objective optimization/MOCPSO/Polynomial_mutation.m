@@ -17,16 +17,24 @@ function Offspring = Polynomial_mutation(Problem,OffDec,OffVel,N,D,mutationRateM
         if nargin < 6
             mutationRateMultiplier = 1.0;  % 默认不改变变异率
         end
+        [numOffspring, D] = size(OffDec);
+        lower = Problem.lower(:)';
+        upper = Problem.upper(:)';
+        if numel(lower) ~= D || numel(upper) ~= D
+            error('Polynomial_mutation:BoundsDimensionMismatch', ...
+                'Bounds length must match OffDec columns. D=%d, lower=%d, upper=%d.', ...
+                D, numel(lower), numel(upper));
+        end
         
-        Lower  = repmat(Problem.lower,2*N,1);
-        Upper  = repmat(Problem.upper,2*N,1);
+        Lower  = repmat(lower,numOffspring,1);
+        Upper  = repmat(upper,numOffspring,1);
         disM   = 20;
         
         % 动态变异概率：基础概率 1/D * mutationRateMultiplier
         % 限制在 [0, 1] 范围内
         mutationRate = min(1.0, (1/D) * mutationRateMultiplier);
-        Site   = rand(2*N,D) < mutationRate;
-        mu     = rand(2*N,D);
+        Site   = rand(numOffspring,D) < mutationRate;
+        mu     = rand(numOffspring,D);
         temp   = Site & mu<=0.5;
         OffDec       = max(min(OffDec,Upper),Lower);
         OffDec(temp) = OffDec(temp)+(Upper(temp)-Lower(temp)).*((2.*mu(temp)+(1-2.*mu(temp)).*...

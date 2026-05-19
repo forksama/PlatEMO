@@ -12,6 +12,7 @@ classdef MOCPSO_Ek_Flexible < ALGORITHM
 % research purposes.
 %--------------------------------------------------------------------------
 properties
+    uniformPointMultiplier = 3;    % Reference vector multiplier
     lambda = 0.5;                 % E_k影响权重 (0~1)
     c_guide = 0.3;                % 引导粒子权重
     useDynamicGrouping = false;   % 是否使用动态分组比例
@@ -23,15 +24,18 @@ methods
     function main(Algorithm, Problem)
         
         %% 参数设置
-        [lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk] = Algorithm.ParameterSet(0.5, 0.3, false, false, true);
+        [lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier] = Algorithm.ParameterSet( ...
+            Algorithm.lambda, Algorithm.c_guide, Algorithm.useDynamicGrouping, Algorithm.useDynamicMutation, Algorithm.useEk, Algorithm.uniformPointMultiplier);
+        uniformPointMultiplier = max(1, round(uniformPointMultiplier));
         Algorithm.lambda = lambda;
         Algorithm.c_guide = c_guide;
         Algorithm.useDynamicGrouping = useDynamicGrouping;
         Algorithm.useDynamicMutation = useDynamicMutation;
         Algorithm.useEk = useEk;
+        Algorithm.uniformPointMultiplier = uniformPointMultiplier;
         
         %% Generate random population
-        [V,~] = UniformPoint(Problem.N * 3, Problem.M);
+        [V,~] = UniformPoint(Problem.N * Algorithm.uniformPointMultiplier, Problem.M);
         Population = Problem.Initialization();
         
         % 根据useEk选择环境选择函数

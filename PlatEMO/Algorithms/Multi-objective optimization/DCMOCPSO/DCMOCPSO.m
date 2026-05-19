@@ -29,6 +29,7 @@ classdef DCMOCPSO < ALGORITHM
 %--------------------------------------------------------------------------
 
 properties
+    uniformPointMultiplier = 3;       % Reference vector multiplier for MOCPSO_Ek_Flexible
     numSegments = 5;                % 分段数量
     segmentOverlap = 1;             % 相邻段之间的重叠航点数
     lambda = 0.5;                   % E_k影响权重 (MOCPSO_Ek参数)
@@ -41,7 +42,10 @@ end
 methods
     function main(Algorithm, Problem)
         %% 参数设置
-        [numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk] = Algorithm.ParameterSet(5, 1, 0.5, 0.3, false, false, true);
+        [numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier] = Algorithm.ParameterSet( ...
+            Algorithm.numSegments, Algorithm.segmentOverlap, Algorithm.lambda, Algorithm.c_guide, ...
+            Algorithm.useDynamicGrouping, Algorithm.useDynamicMutation, Algorithm.useEk, Algorithm.uniformPointMultiplier);
+        uniformPointMultiplier = max(1, round(uniformPointMultiplier));
         Algorithm.numSegments = numSegments;
         Algorithm.segmentOverlap = segmentOverlap;
         Algorithm.lambda = lambda;
@@ -49,6 +53,7 @@ methods
         Algorithm.useDynamicGrouping = useDynamicGrouping;
         Algorithm.useDynamicMutation = useDynamicMutation;
         Algorithm.useEk = useEk;
+        Algorithm.uniformPointMultiplier = uniformPointMultiplier;
         
         % 检查问题类型
         if ~isa(Problem, 'UAVPathPlanning')
@@ -119,12 +124,13 @@ methods
                 SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, fullWaypoints, presetPathStart, segmentMaxFE);
                 SubProblem.FE = 0;
                 
-                MOCPSOAlg = MOCPSO_Ek_Flexible();
+                MOCPSOAlg = MOCPSO_Ek_Flexible('parameter', {lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier});
                 MOCPSOAlg.lambda = lambda;
                 MOCPSOAlg.c_guide = c_guide;
                 MOCPSOAlg.useEk = useEk;
                 MOCPSOAlg.useDynamicGrouping = useDynamicGrouping;
                 MOCPSOAlg.useDynamicMutation = useDynamicMutation;
+                MOCPSOAlg.uniformPointMultiplier = uniformPointMultiplier;
                 previousProblem = PROBLEM.Current();
                 
                 try
@@ -202,12 +208,13 @@ methods
                     SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, prevFullWaypoints, fixedStartPoint, segmentMaxFEPerPath);
                     SubProblem.FE = 0;
                     
-                    MOCPSOAlg = MOCPSO_Ek_Flexible();
+                    MOCPSOAlg = MOCPSO_Ek_Flexible('parameter', {lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier});
                     MOCPSOAlg.lambda = lambda;
                     MOCPSOAlg.c_guide = c_guide;
                     MOCPSOAlg.useEk = useEk;
                     MOCPSOAlg.useDynamicGrouping = useDynamicGrouping;
                     MOCPSOAlg.useDynamicMutation = useDynamicMutation;
+                    MOCPSOAlg.uniformPointMultiplier = uniformPointMultiplier;
                     previousProblem = PROBLEM.Current();
                     
                     try

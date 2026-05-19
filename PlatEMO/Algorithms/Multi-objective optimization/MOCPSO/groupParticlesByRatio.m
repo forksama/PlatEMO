@@ -31,6 +31,14 @@ function [Winner, Loser1, Loser2] = groupParticlesByRatio(Population, FitValue, 
     
     % 计算可用粒子数（能被totalRatio整除）
     numUsable = floor(N / totalRatio) * totalRatio;
+    if numUsable < totalRatio && N >= 3
+        ratio = [1, 1, 1];
+        a = ratio(1);
+        b = ratio(2);
+        c = ratio(3);
+        totalRatio = sum(ratio);
+        numUsable = floor(N / totalRatio) * totalRatio;
+    end
     
     % 随机打乱粒子索引
     shuffledIdx = randperm(N, numUsable);
