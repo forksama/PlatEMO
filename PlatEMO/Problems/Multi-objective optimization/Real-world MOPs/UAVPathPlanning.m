@@ -44,7 +44,7 @@ classdef UAVPathPlanning < PROBLEM
         TTT;             % 时间间隔（s）
         numBS;           % 基站数量
         switchThreshold; % 切换阈值（dBm）
-        switchMethod;    % 切换算法选择（0=基于阈值的切换，未来可扩展）
+        switchMethod;    % 切换算法选择（0=基于阈值，1=CASH，2=前瞻性，3=A3）
         lookaheadDistance; % 前向展望距离（米），仅switchMethod=2时使用
         P_tx;            % 无人机发射功率（dBm）
         obstacleMethod;  % 障碍物与预设路径生成方法（固定为0，基于αβγ的方法）
@@ -136,6 +136,7 @@ classdef UAVPathPlanning < PROBLEM
             %       0 = 基于阈值的切换（当前连接基站信号 < 阈值时切换到最强基站）
             %       1 = CASH切换算法（基于几何评分和迟滞余量）
             %       2 = 前瞻性切换算法（基于预设路径的信号预测）
+            %       3 = A3切换算法（候选基站信号 > 当前服务基站信号 + 固定迟滞余量）
             %       默认值：0
             %   lookaheadDistance: 前向展望距离（米），仅switchMethod=2时使用，默认500
             % 注意：不再需要numWaypoints参数，航点数量将自动计算
@@ -804,6 +805,8 @@ classdef UAVPathPlanning < PROBLEM
             % 根据 switchMethod 参数选择切换算法
             % switchMethod = 0: 基于阈值的切换（当前连接基站信号 < 阈值时切换到最强基站）
             % switchMethod = 1: CASH切换算法（基于几何评分和迟滞余量）
+            % switchMethod = 2: 前瞻性切换算法（基于预设路径的信号预测）
+            % switchMethod = 3: A3切换算法（固定迟滞余量 + TTT确认）
             
             % 调用 calculateSwitchDetails 获取完整详情，避免代码重复
             details = obj.calculateSwitchDetails(waypoints);
@@ -838,10 +841,14 @@ classdef UAVPathPlanning < PROBLEM
             
             previousBS = 0;
             
-            % CASH算法参数
+            % 切换算法公共参数
             delta = 4;  % 安全裕度（dB）
             minSignalThreshold = obj.switchThreshold;  % 最小可用信号阈值（dBm）
             hysteresisMargin = 3;  % 迟滞余量（dB）
+            a3TttCounter = 0;
+            a3CandidateBS = 0;
+            % 当前模型每个航点间隔已经等于TTT，因此A3持续确认对应一个采样步。
+            a3TttRequiredSteps = 1;
             
             % CASH算法预计算数据
             if obj.switchMethod == 1
@@ -999,6 +1006,43 @@ classdef UAVPathPlanning < PROBLEM
                             end
                         end
                         
+                    case 3
+                        % A3切换算法：候选基站信号持续高于当前服务基站信号固定迟滞余量时切换
+                        if j == 1
+                            details.connectedBS(j) = bestBS;
+                            previousBS = bestBS;
+                            a3TttCounter = 0;
+                            a3CandidateBS = 0;
+                        else
+                            currentSignal = signalStrengths(previousBS);
+                            targetBS = bestBS;
+                            targetSignal = signalStrengths(targetBS);
+
+                            if targetBS ~= previousBS && targetSignal > currentSignal + hysteresisMargin
+                                if targetBS == a3CandidateBS
+                                    a3TttCounter = a3TttCounter + 1;
+                                else
+                                    a3CandidateBS = targetBS;
+                                    a3TttCounter = 1;
+                                end
+                            else
+                                a3CandidateBS = 0;
+                                a3TttCounter = 0;
+                            end
+
+                            if targetBS ~= previousBS && UAVPathPlanning.shouldTriggerA3Handover( ...
+                                    currentSignal, targetSignal, hysteresisMargin, a3TttCounter, a3TttRequiredSteps)
+                                details.switchCount = details.switchCount + 1;
+                                details.switchPoints = [details.switchPoints, j];
+                                details.connectedBS(j) = targetBS;
+                                previousBS = targetBS;
+                                a3CandidateBS = 0;
+                                a3TttCounter = 0;
+                            else
+                                details.connectedBS(j) = previousBS;
+                            end
+                        end
+
                     otherwise
                         % 默认使用基于阈值的切换算法
                         if j == 1
@@ -2604,5 +2648,11 @@ classdef UAVPathPlanning < PROBLEM
             intersects = true;
         end
     end
-end
 
+    methods(Static)
+        function shouldSwitch = shouldTriggerA3Handover(currentSignal, candidateSignal, hysteresisMargin, tttCounter, tttRequiredSteps)
+            % A3 event: candidate RSRP must be strictly higher than serving RSRP plus hysteresis for TTT.
+            shouldSwitch = candidateSignal > currentSignal + hysteresisMargin && tttCounter >= tttRequiredSteps;
+        end
+    end
+end
