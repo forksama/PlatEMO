@@ -124,7 +124,7 @@ methods
                 SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, fullWaypoints, presetPathStart, segmentMaxFE);
                 SubProblem.FE = 0;
                 
-                MOCPSOAlg = MOCPSO_Ek_Flexible('parameter', {lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier});
+                MOCPSOAlg = MOCPSO_Ek_Flexible('parameter', {lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier}, 'outputFcn', @(~,~)[]);
                 MOCPSOAlg.lambda = lambda;
                 MOCPSOAlg.c_guide = c_guide;
                 MOCPSOAlg.useEk = useEk;
@@ -208,7 +208,7 @@ methods
                     SubProblem = UAVPathPlanningSegment(Problem, startIdx, endIdx, prevFullWaypoints, fixedStartPoint, segmentMaxFEPerPath);
                     SubProblem.FE = 0;
                     
-                    MOCPSOAlg = MOCPSO_Ek_Flexible('parameter', {lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier});
+                    MOCPSOAlg = MOCPSO_Ek_Flexible('parameter', {lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk, uniformPointMultiplier}, 'outputFcn', @(~,~)[]);
                     MOCPSOAlg.lambda = lambda;
                     MOCPSOAlg.c_guide = c_guide;
                     MOCPSOAlg.useEk = useEk;

@@ -47,6 +47,7 @@ Algorithm = DCMOCPSO('parameter', {5, 2, 0.5, 0.3, true, true});
 %       0 = 基于阈值的切换
 %       1 = CASH切换算法
 %       2 = 前瞻性切换算法（基于预设路径的信号预测）
+%       3 = A3切换算法（固定迟滞余量 + TTT确认）
 %   lookaheadDistance: 前向展望距离（米），仅switchMethod=2时使用
 Problem = UAVPathPlanning('N', 20, 'maxFE', 100, 'parameter', {20, 20, 5, -101.5, 0, 30, 1, 500});
 
