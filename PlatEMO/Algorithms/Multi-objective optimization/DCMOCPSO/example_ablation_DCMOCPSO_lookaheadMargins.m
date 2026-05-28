@@ -1,12 +1,19 @@
-% example_ablation_DCMOCPSO_lambda_cguide.m
+% example_ablation_DCMOCPSO_lookaheadMargins.m
 %
-% One-factor ablation/sensitivity study for lambda and c_guide in DCMOCPSO.
+% One-factor comparison for the lookahead handover margins used by
+% UAVPathPlanning switchMethod=2, with DCMOCPSO enhancements disabled:
+%   - lookaheadHysteresisRange: dynamic hysteresis range, in dB
+%   - lookaheadSafetyMargin: safety margin, in dB
 %
-% Experiment 1: lambda sweep with c_guide fixed at 0.3
-%   lambdaList = [0, 0.25, 0.5, 0.75, 1.0]
+% The algorithm parameter is fixed to:
+%   param_OneSeg = {1, 2, 0.5, 0.3, false, false, false}
+% so this script observes the lookahead mechanism in UAVPathPlanning while
+% excluding dynamic grouping, dynamic mutation, and EK guidance effects.
 %
-% Experiment 2: c_guide sweep with lambda fixed at 0.5
-%   cGuideList = [0, 0.1, 0.3, 0.5, 0.7]
+% The ninth and tenth UAVPathPlanning parameters are optional. When omitted,
+% UAVPathPlanning keeps the current defaults:
+%   lookaheadHysteresisRange = 10 dB
+%   lookaheadSafetyMargin    = 4 dB
 %
 % Each parameter setting is cached independently. After every successful
 % independent run, the corresponding cache file is saved immediately.
@@ -23,24 +30,24 @@ parallelPoolProfile = 'Processes';
 parallelPoolNumWorkers = [];
 prepareParallelPool(enableParallelPool, parallelPoolProfile, parallelPoolNumWorkers);
 
-% UAVPathPlanning parameters.
+% UAVPathPlanning base parameters:
+% {bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx,
+%  switchMethod, lookaheadDistance, lookaheadHysteresisRange,
+%  lookaheadSafetyMargin}
 N = 20;
-problemParameter_Lookahead = {20, 20, 5, -101.5, 0, 30, 2, 500};
+baseProblemParameter = {20, 20, 5, -101.5, 0, 30, 2, 500};
 
-% DCMOCPSO common settings.
-maxFE_DCMOCPSO = 100;
-numSegments = 5;
-segmentOverlap = 2;
-useDynamicGrouping = true;
-useDynamicMutation = true;
-useEk = true;
-uniformPointMultiplier = 3;
+% One-factor sweeps around the current defaults (10 dB, 4 dB).
+% Smaller values switch more aggressively; larger values suppress switching.
+lookaheadHysteresisRangeList = [0, 5, 10, 15, 20];
+lookaheadSafetyMarginList = [0, 2, 4, 6, 8];
+defaultHysteresisRange = 10;
+defaultSafetyMargin = 4;
 
-% Ablation values requested for the two one-factor experiments.
-lambdaList = [0, 0.25, 0.5, 0.75, 1.0];
-cGuideList = [0, 0.1, 0.3, 0.5, 0.7];
-fixedLambda = 0.5;
-fixedCGuide = 0.3;
+% OneSeg settings. DCMOCPSO is still used as the runner, but its additional
+% mechanisms are disabled so the comparison only changes UAVPathPlanning.
+maxFE_OneSeg = 418;
+param_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
 
 % Result cache. Use experiment-specific files to avoid mixing with older
 % DCMOCPSO ablation caches.
@@ -51,66 +58,62 @@ end
 
 commonConfig = struct( ...
     'N', N, ...
-    'maxFE', maxFE_DCMOCPSO, ...
-    'problemParameter', {problemParameter_Lookahead}, ...
-    'numSegments', numSegments, ...
-    'segmentOverlap', segmentOverlap, ...
-    'useDynamicGrouping', useDynamicGrouping, ...
-    'useDynamicMutation', useDynamicMutation, ...
-    'useEk', useEk, ...
-    'uniformPointMultiplier', uniformPointMultiplier);
+    'maxFE', maxFE_OneSeg, ...
+    'baseProblemParameter', {baseProblemParameter}, ...
+    'param_OneSeg', {param_OneSeg});
 
-%% Experiment 1: lambda sweep
-lambdaGroupNames = arrayfun(@(v) sprintf('lambda_%s', valueTag(v)), lambdaList, 'UniformOutput', false);
-lambdaGroupParams = cell(1, numel(lambdaList));
-for i = 1:numel(lambdaList)
-    lambdaGroupParams{i} = makeDCMOCPSOParam(commonConfig, lambdaList(i), fixedCGuide);
+%% Experiment 1: hysteresis-range sweep
+hysteresisGroupNames = arrayfun(@(v) sprintf('hyst_%sdB', valueTag(v)), lookaheadHysteresisRangeList, 'UniformOutput', false);
+hysteresisGroupParams = cell(1, numel(lookaheadHysteresisRangeList));
+for i = 1:numel(lookaheadHysteresisRangeList)
+    hysteresisGroupParams{i} = makeProblemParameter(baseProblemParameter, lookaheadHysteresisRangeList(i), defaultSafetyMargin);
 end
 
-lambdaResults = runExperimentSet( ...
-    'LambdaSweep', lambdaGroupNames, lambdaGroupParams, lambdaList, ...
-    'lambda', fixedCGuide, 'c_guide', cacheDir, n, commonConfig);
+hysteresisResults = runExperimentSet( ...
+    'LookaheadHysteresisOneSegSweep', hysteresisGroupNames, hysteresisGroupParams, lookaheadHysteresisRangeList, ...
+    'lookaheadHysteresisRange', defaultSafetyMargin, 'lookaheadSafetyMargin', cacheDir, n, commonConfig);
 
-%% Experiment 2: c_guide sweep
-cGuideGroupNames = arrayfun(@(v) sprintf('cGuide_%s', valueTag(v)), cGuideList, 'UniformOutput', false);
-cGuideGroupParams = cell(1, numel(cGuideList));
-for i = 1:numel(cGuideList)
-    cGuideGroupParams{i} = makeDCMOCPSOParam(commonConfig, fixedLambda, cGuideList(i));
+%% Experiment 2: safety-margin sweep
+safetyGroupNames = arrayfun(@(v) sprintf('safety_%sdB', valueTag(v)), lookaheadSafetyMarginList, 'UniformOutput', false);
+safetyGroupParams = cell(1, numel(lookaheadSafetyMarginList));
+for i = 1:numel(lookaheadSafetyMarginList)
+    safetyGroupParams{i} = makeProblemParameter(baseProblemParameter, defaultHysteresisRange, lookaheadSafetyMarginList(i));
 end
 
-cGuideResults = runExperimentSet( ...
-    'CGuideSweep', cGuideGroupNames, cGuideGroupParams, cGuideList, ...
-    'c_guide', fixedLambda, 'lambda', cacheDir, n, commonConfig);
+safetyResults = runExperimentSet( ...
+    'LookaheadSafetyOneSegSweep', safetyGroupNames, safetyGroupParams, lookaheadSafetyMarginList, ...
+    'lookaheadSafetyMargin', defaultHysteresisRange, 'lookaheadHysteresisRange', cacheDir, n, commonConfig);
 
 %% Save combined summary
-combinedSummaryFile = fullfile(cacheDir, 'LambdaCGuide_sweep_summary.mat');
-save(combinedSummaryFile, 'lambdaResults', 'cGuideResults', 'lambdaList', 'cGuideList', ...
-    'fixedLambda', 'fixedCGuide', 'n', 'commonConfig');
+combinedSummaryFile = fullfile(cacheDir, 'LookaheadMargins_OneSeg_oneFactor_summary.mat');
+save(combinedSummaryFile, 'hysteresisResults', 'safetyResults', ...
+    'lookaheadHysteresisRangeList', 'lookaheadSafetyMarginList', ...
+    'defaultHysteresisRange', 'defaultSafetyMargin', 'n', 'commonConfig');
 fprintf('\nCombined summary saved to: %s\n', combinedSummaryFile);
 
 %% Plot comparisons
-colorsLambda = lines(numel(lambdaList));
-colorsCGuide = lines(numel(cGuideList));
+colorsHysteresis = lines(numel(lookaheadHysteresisRangeList));
+colorsSafety = lines(numel(lookaheadSafetyMarginList));
 
-plotBarComparison('lambda sweep HV', 'Mean of last HV', ...
-    sprintf('DCMOCPSO lambda sweep: c\\_guide = %.2f', fixedCGuide), ...
-    lambdaGroupNames, lambdaResults.meanHV, lambdaResults.stdHV, colorsLambda, [200, 200, 860, 520], true);
+plotBarComparison('lookahead hysteresis sweep HV', 'Mean of last HV', ...
+    sprintf('OneSeg lookahead hysteresis sweep: safety margin = %g dB', defaultSafetyMargin), ...
+    hysteresisGroupNames, hysteresisResults.meanHV, hysteresisResults.stdHV, colorsHysteresis, [200, 200, 860, 520], true);
 
-plotBarComparison('lambda sweep runtime', 'Mean runtime (seconds)', ...
-    sprintf('DCMOCPSO lambda sweep runtime: c\\_guide = %.2f', fixedCGuide), ...
-    lambdaGroupNames, lambdaResults.meanRuntime, lambdaResults.stdRuntime, colorsLambda, [1120, 200, 860, 520], false);
+plotBarComparison('lookahead hysteresis sweep runtime', 'Mean runtime (seconds)', ...
+    sprintf('OneSeg lookahead hysteresis sweep runtime: safety margin = %g dB', defaultSafetyMargin), ...
+    hysteresisGroupNames, hysteresisResults.meanRuntime, hysteresisResults.stdRuntime, colorsHysteresis, [1120, 200, 860, 520], false);
 
-plotBarComparison('c_guide sweep HV', 'Mean of last HV', ...
-    sprintf('DCMOCPSO c\\_guide sweep: lambda = %.2f', fixedLambda), ...
-    cGuideGroupNames, cGuideResults.meanHV, cGuideResults.stdHV, colorsCGuide, [200, 780, 860, 520], true);
+plotBarComparison('lookahead safety sweep HV', 'Mean of last HV', ...
+    sprintf('OneSeg lookahead safety sweep: hysteresis range = %g dB', defaultHysteresisRange), ...
+    safetyGroupNames, safetyResults.meanHV, safetyResults.stdHV, colorsSafety, [200, 780, 860, 520], true);
 
-plotBarComparison('c_guide sweep runtime', 'Mean runtime (seconds)', ...
-    sprintf('DCMOCPSO c\\_guide sweep runtime: lambda = %.2f', fixedLambda), ...
-    cGuideGroupNames, cGuideResults.meanRuntime, cGuideResults.stdRuntime, colorsCGuide, [1120, 780, 860, 520], false);
+plotBarComparison('lookahead safety sweep runtime', 'Mean runtime (seconds)', ...
+    sprintf('OneSeg lookahead safety sweep runtime: hysteresis range = %g dB', defaultHysteresisRange), ...
+    safetyGroupNames, safetyResults.meanRuntime, safetyResults.stdRuntime, colorsSafety, [1120, 780, 860, 520], false);
 
 
 %% ===================== local functions =====================
-function results = runExperimentSet(experimentName, groupNames, groupParams, sweptValues, sweptParamName, fixedValue, fixedParamName, cacheDir, n, commonConfig)
+function results = runExperimentSet(experimentName, groupNames, groupProblemParams, sweptValues, sweptParamName, fixedValue, fixedParamName, cacheDir, n, commonConfig)
     numGroups = numel(groupNames);
     hvLastAll = cell(1, numGroups);
     hvSeriesAll = cell(1, numGroups);
@@ -122,15 +125,15 @@ function results = runExperimentSet(experimentName, groupNames, groupParams, swe
     objMetricSummaryAll = cell(1, numGroups);
 
     fprintf('\n=== %s (n=%d) ===\n', experimentName, n);
-    fprintf('Common settings: N=%d, maxFE=%d, numSegments=%d, segmentOverlap=%d, uniformPointMultiplier=%d\n', ...
-        commonConfig.N, commonConfig.maxFE, commonConfig.numSegments, commonConfig.segmentOverlap, commonConfig.uniformPointMultiplier);
+    fprintf('Common settings: N=%d, maxFE=%d, param_OneSeg={1,2,0.5,0.3,false,false,false}, lookaheadDistance=%g m\n', ...
+        commonConfig.N, commonConfig.maxFE, commonConfig.baseProblemParameter{8});
     fprintf('Sweeping %s; fixed %s = %.4g\n', sweptParamName, fixedParamName, fixedValue);
 
     for i = 1:numGroups
         cacheFile = fullfile(cacheDir, sprintf('%s_%s_HV_runs.mat', experimentName, groupNames{i}));
         [hvLastAll{i}, hvSeriesAll{i}, actualFEAll{i}, runtimeAll{i}, meanSignalAll{i}, meanSwitchCountAll{i}, meanCoverageRatioAll{i}, objMetricSummaryAll{i}] = runOrLoad( ...
             sprintf('%s/%s', experimentName, groupNames{i}), cacheFile, n, ...
-            @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE, commonConfig.problemParameter, groupParams{i}), ...
+            @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE, groupProblemParams{i}, commonConfig.param_OneSeg), ...
             true);
     end
 
@@ -170,7 +173,7 @@ function results = runExperimentSet(experimentName, groupNames, groupParams, swe
     results = struct();
     results.experimentName = experimentName;
     results.groupNames = groupNames;
-    results.groupParams = groupParams;
+    results.groupProblemParams = groupProblemParams;
     results.sweptParamName = sweptParamName;
     results.sweptValues = sweptValues;
     results.fixedParamName = fixedParamName;
@@ -201,20 +204,15 @@ function results = runExperimentSet(experimentName, groupNames, groupParams, swe
     fprintf('%s summary saved to: %s\n', experimentName, summaryFile);
 end
 
-function param = makeDCMOCPSOParam(commonConfig, lambda, cGuide)
-    param = { ...
-        commonConfig.numSegments, ...
-        commonConfig.segmentOverlap, ...
-        lambda, ...
-        cGuide, ...
-        commonConfig.useDynamicGrouping, ...
-        commonConfig.useDynamicMutation, ...
-        commonConfig.useEk, ...
-        commonConfig.uniformPointMultiplier};
+function problemParameter = makeProblemParameter(baseProblemParameter, hysteresisRange, safetyMargin)
+    problemParameter = baseProblemParameter;
+    problemParameter{7} = 2;
+    problemParameter{9} = hysteresisRange;
+    problemParameter{10} = safetyMargin;
 end
 
 function tag = valueTag(value)
-    tag = strrep(sprintf('%.2f', value), '.', 'p');
+    tag = strrep(sprintf('%g', value), '.', 'p');
 end
 
 function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
@@ -331,8 +329,8 @@ function prepareParallelPool(enableParallelPool, poolProfile, numWorkers)
     fprintf('[Parallel] Pool ready with %d worker(s).\n', pool.NumWorkers);
 end
 
-function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, param_DCMOCPSO)
-    Algorithm = DCMOCPSO('parameter', param_DCMOCPSO, 'outputFcn', @(~,~)[]);
+function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, algorithmParameter)
+    Algorithm = DCMOCPSO('parameter', algorithmParameter, 'outputFcn', @(~,~)[]);
     Problem = UAVPathPlanning('N', N, 'maxFE', maxFE, 'parameter', problemParameter);
     tStart = tic;
     Algorithm.Solve(Problem);

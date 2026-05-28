@@ -45,7 +45,7 @@ cacheFile_Full_Lookahead   = fullfile(cacheDir, 'Full_Lookahead_HV_runs.mat');
 %% Run ablation settings (or load cache)
 
 % 4) Full_Lookahead: Full配置+前瞻性切换算法（先运行，用于计算单段配置的maxFE）
-[hvLast_Full_Lookahead, hvSeries_Full_Lookahead, actualFE_Full_Lookahead, runtime_Full_Lookahead, Algorithm_Full_Lookahead, Problem_Full_Lookahead] = runOrLoad( ...
+[hvLast_Full_Lookahead, hvSeries_Full_Lookahead, actualFE_Full_Lookahead, runtime_Full_Lookahead, meanSignal_Full_Lookahead, meanSwitchCount_Full_Lookahead, meanCoverageRatio_Full_Lookahead, objMetricSummary_Full_Lookahead, Algorithm_Full_Lookahead, Problem_Full_Lookahead] = runOrLoad( ...
     'Full_Lookahead', cacheFile_Full_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Full), true);
 
 % OneSeg的maxFE基于Full_Lookahead的实际FE按段均分（确保公平对比）
@@ -60,19 +60,19 @@ else
 end
 
 % 3) Seg_Lookahead: 添加分段算法（Base配置）+前瞻性切换算法
-[hvLast_Seg_Lookahead, hvSeries_Seg_Lookahead, actualFE_Seg_Lookahead, runtime_Seg_Lookahead, Algorithm_Seg_Lookahead, Problem_Seg_Lookahead] = runOrLoad( ...
+[hvLast_Seg_Lookahead, hvSeries_Seg_Lookahead, actualFE_Seg_Lookahead, runtime_Seg_Lookahead, meanSignal_Seg_Lookahead, meanSwitchCount_Seg_Lookahead, meanCoverageRatio_Seg_Lookahead, objMetricSummary_Seg_Lookahead, Algorithm_Seg_Lookahead, Problem_Seg_Lookahead] = runOrLoad( ...
     'Seg_Lookahead', cacheFile_Seg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Seg), true);
 
 % 1) OneSeg: 基准（单段+无增强+switchMethod=0）
-[hvLast_OneSeg, hvSeries_OneSeg, actualFE_OneSeg, runtime_OneSeg, Algorithm_OneSeg, Problem_OneSeg] = runOrLoad( ...
+[hvLast_OneSeg, hvSeries_OneSeg, actualFE_OneSeg, runtime_OneSeg, meanSignal_OneSeg, meanSwitchCount_OneSeg, meanCoverageRatio_OneSeg, objMetricSummary_OneSeg, Algorithm_OneSeg, Problem_OneSeg] = runOrLoad( ...
     'OneSeg', cacheFile_OneSeg, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Base, param_OneSeg), true);
 
 % 2) OneSeg_A3: OneSeg基础上使用A3切换算法，其余参数与基准一致
-[hvLast_OneSeg_A3, hvSeries_OneSeg_A3, actualFE_OneSeg_A3, runtime_OneSeg_A3, Algorithm_OneSeg_A3, Problem_OneSeg_A3] = runOrLoad( ...
+[hvLast_OneSeg_A3, hvSeries_OneSeg_A3, actualFE_OneSeg_A3, runtime_OneSeg_A3, meanSignal_OneSeg_A3, meanSwitchCount_OneSeg_A3, meanCoverageRatio_OneSeg_A3, objMetricSummary_OneSeg_A3, Algorithm_OneSeg_A3, Problem_OneSeg_A3] = runOrLoad( ...
     'OneSeg_A3', cacheFile_OneSeg_A3, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_A3, param_OneSeg), true);
 
 % 3) OneSeg_Lookahead: OneSeg基础上使用前瞻性切换算法
-[hvLast_OneSeg_Lookahead, hvSeries_OneSeg_Lookahead, actualFE_OneSeg_Lookahead, runtime_OneSeg_Lookahead, Algorithm_OneSeg_Lookahead, Problem_OneSeg_Lookahead] = runOrLoad( ...
+[hvLast_OneSeg_Lookahead, hvSeries_OneSeg_Lookahead, actualFE_OneSeg_Lookahead, runtime_OneSeg_Lookahead, meanSignal_OneSeg_Lookahead, meanSwitchCount_OneSeg_Lookahead, meanCoverageRatio_OneSeg_Lookahead, objMetricSummary_OneSeg_Lookahead, Algorithm_OneSeg_Lookahead, Problem_OneSeg_Lookahead] = runOrLoad( ...
     'OneSeg_Lookahead', cacheFile_OneSeg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Lookahead, param_OneSeg), true);
 
 %% Score（忽略NaN）
@@ -100,17 +100,49 @@ meanActualFE_OneSeg_Lookahead = mean(actualFE_OneSeg_Lookahead(validIdx_OneSeg_L
 meanActualFE_Seg_Lookahead    = mean(actualFE_Seg_Lookahead(validIdx_Seg_Lookahead));
 meanActualFE_Full_Lookahead   = mean(actualFE_Full_Lookahead(validIdx_Full_Lookahead));
 
+meanSignal_OneSeg_summary           = meanValid(meanSignal_OneSeg(validIdx_OneSeg));
+meanSignal_OneSeg_A3_summary        = meanValid(meanSignal_OneSeg_A3(validIdx_OneSeg_A3));
+meanSignal_OneSeg_Lookahead_summary = meanValid(meanSignal_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
+meanSignal_Seg_Lookahead_summary    = meanValid(meanSignal_Seg_Lookahead(validIdx_Seg_Lookahead));
+meanSignal_Full_Lookahead_summary   = meanValid(meanSignal_Full_Lookahead(validIdx_Full_Lookahead));
+
+meanSwitchCount_OneSeg_summary           = meanValid(meanSwitchCount_OneSeg(validIdx_OneSeg));
+meanSwitchCount_OneSeg_A3_summary        = meanValid(meanSwitchCount_OneSeg_A3(validIdx_OneSeg_A3));
+meanSwitchCount_OneSeg_Lookahead_summary = meanValid(meanSwitchCount_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
+meanSwitchCount_Seg_Lookahead_summary    = meanValid(meanSwitchCount_Seg_Lookahead(validIdx_Seg_Lookahead));
+meanSwitchCount_Full_Lookahead_summary   = meanValid(meanSwitchCount_Full_Lookahead(validIdx_Full_Lookahead));
+
+meanCoverageRatio_OneSeg_summary           = meanValid(meanCoverageRatio_OneSeg(validIdx_OneSeg));
+meanCoverageRatio_OneSeg_A3_summary        = meanValid(meanCoverageRatio_OneSeg_A3(validIdx_OneSeg_A3));
+meanCoverageRatio_OneSeg_Lookahead_summary = meanValid(meanCoverageRatio_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
+meanCoverageRatio_Seg_Lookahead_summary    = meanValid(meanCoverageRatio_Seg_Lookahead(validIdx_Seg_Lookahead));
+meanCoverageRatio_Full_Lookahead_summary   = meanValid(meanCoverageRatio_Full_Lookahead(validIdx_Full_Lookahead));
+
 fprintf('\n=== Summary (n=%d) ===\n', n);
-fprintf('OneSeg           : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs)\n', ...
-    meanHV_OneSeg, sum(validIdx_OneSeg), n, maxFE_OneSeg, meanActualFE_OneSeg, meanRuntime_OneSeg);
-fprintf('OneSeg_A3        : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs)\n', ...
-    meanHV_OneSeg_A3, sum(validIdx_OneSeg_A3), n, maxFE_OneSeg, meanActualFE_OneSeg_A3, meanRuntime_OneSeg_A3);
-fprintf('OneSeg_Lookahead : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs)\n', ...
-    meanHV_OneSeg_Lookahead, sum(validIdx_OneSeg_Lookahead), n, maxFE_OneSeg, meanActualFE_OneSeg_Lookahead, meanRuntime_OneSeg_Lookahead);
-fprintf('Seg_Lookahead    : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs)\n', ...
-    meanHV_Seg_Lookahead, sum(validIdx_Seg_Lookahead), n, maxFE_DCMOCPSO, meanActualFE_Seg_Lookahead, meanRuntime_Seg_Lookahead);
-fprintf('Full_Lookahead   : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs)\n', ...
-    meanHV_Full_Lookahead, sum(validIdx_Full_Lookahead), n, maxFE_DCMOCPSO, meanActualFE_Full_Lookahead, meanRuntime_Full_Lookahead);
+fprintf('OneSeg           : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+    meanHV_OneSeg, sum(validIdx_OneSeg), n, maxFE_OneSeg, meanActualFE_OneSeg, meanRuntime_OneSeg, meanSignal_OneSeg_summary, meanSwitchCount_OneSeg_summary, meanCoverageRatio_OneSeg_summary);
+fprintf('OneSeg_A3        : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+    meanHV_OneSeg_A3, sum(validIdx_OneSeg_A3), n, maxFE_OneSeg, meanActualFE_OneSeg_A3, meanRuntime_OneSeg_A3, meanSignal_OneSeg_A3_summary, meanSwitchCount_OneSeg_A3_summary, meanCoverageRatio_OneSeg_A3_summary);
+fprintf('OneSeg_Lookahead : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+    meanHV_OneSeg_Lookahead, sum(validIdx_OneSeg_Lookahead), n, maxFE_OneSeg, meanActualFE_OneSeg_Lookahead, meanRuntime_OneSeg_Lookahead, meanSignal_OneSeg_Lookahead_summary, meanSwitchCount_OneSeg_Lookahead_summary, meanCoverageRatio_OneSeg_Lookahead_summary);
+fprintf('Seg_Lookahead    : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+    meanHV_Seg_Lookahead, sum(validIdx_Seg_Lookahead), n, maxFE_DCMOCPSO, meanActualFE_Seg_Lookahead, meanRuntime_Seg_Lookahead, meanSignal_Seg_Lookahead_summary, meanSwitchCount_Seg_Lookahead_summary, meanCoverageRatio_Seg_Lookahead_summary);
+fprintf('Full_Lookahead   : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+    meanHV_Full_Lookahead, sum(validIdx_Full_Lookahead), n, maxFE_DCMOCPSO, meanActualFE_Full_Lookahead, meanRuntime_Full_Lookahead, meanSignal_Full_Lookahead_summary, meanSwitchCount_Full_Lookahead_summary, meanCoverageRatio_Full_Lookahead_summary);
+
+results = struct();
+results.experimentName = 'DCMOCPSO_vs_MOCPSO_Ek';
+results.groupNames = {'OneSeg', 'OneSeg_A3', 'OneSeg_Lookahead', 'Seg_Lookahead', 'Full_Lookahead'};
+results.meanHV = [meanHV_OneSeg, meanHV_OneSeg_A3, meanHV_OneSeg_Lookahead, meanHV_Seg_Lookahead, meanHV_Full_Lookahead];
+results.meanRuntime = [meanRuntime_OneSeg, meanRuntime_OneSeg_A3, meanRuntime_OneSeg_Lookahead, meanRuntime_Seg_Lookahead, meanRuntime_Full_Lookahead];
+results.meanActualFE = [meanActualFE_OneSeg, meanActualFE_OneSeg_A3, meanActualFE_OneSeg_Lookahead, meanActualFE_Seg_Lookahead, meanActualFE_Full_Lookahead];
+results.meanSignal = [meanSignal_OneSeg_summary, meanSignal_OneSeg_A3_summary, meanSignal_OneSeg_Lookahead_summary, meanSignal_Seg_Lookahead_summary, meanSignal_Full_Lookahead_summary];
+results.meanSwitchCount = [meanSwitchCount_OneSeg_summary, meanSwitchCount_OneSeg_A3_summary, meanSwitchCount_OneSeg_Lookahead_summary, meanSwitchCount_Seg_Lookahead_summary, meanSwitchCount_Full_Lookahead_summary];
+results.meanCoverageRatio = [meanCoverageRatio_OneSeg_summary, meanCoverageRatio_OneSeg_A3_summary, meanCoverageRatio_OneSeg_Lookahead_summary, meanCoverageRatio_Seg_Lookahead_summary, meanCoverageRatio_Full_Lookahead_summary];
+results.objMetricSummaryAll = {objMetricSummary_OneSeg, objMetricSummary_OneSeg_A3, objMetricSummary_OneSeg_Lookahead, objMetricSummary_Seg_Lookahead, objMetricSummary_Full_Lookahead};
+summaryFile = fullfile(cacheDir, 'DCMOCPSO_vs_MOCPSO_Ek_summary.mat');
+save(summaryFile, 'results');
+fprintf('\nSummary saved to: %s\n', summaryFile);
 
 %% Plot bar chart with smart y-axis
 figure('Name', 'HV comparison', 'Position', [200, 200, 700, 500]);
@@ -168,11 +200,15 @@ grid on;
 
 
 %% ===================== local functions =====================
-function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
+function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
     hvLast = nan(1,n);
     hvSeries = cell(1,n);
     actualFE = nan(1,n);
     runtime = nan(1,n);
+    meanSignal = nan(1,n);
+    meanSwitchCount = nan(1,n);
+    meanCoverageRatio = nan(1,n);
+    objMetricSummary = cell(1,n);
     lastAlgorithm = [];
     lastProblem = [];
 
@@ -193,8 +229,20 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
                 if isfield(runs, 'runtime')
                     runtime(i) = runs(i).runtime;
                 end
+                if isfield(runs, 'meanSignal') && ~isempty(runs(i).meanSignal)
+                    meanSignal(i) = runs(i).meanSignal;
+                end
+                if isfield(runs, 'meanSwitchCount') && ~isempty(runs(i).meanSwitchCount)
+                    meanSwitchCount(i) = runs(i).meanSwitchCount;
+                end
+                if isfield(runs, 'meanCoverageRatio') && ~isempty(runs(i).meanCoverageRatio)
+                    meanCoverageRatio(i) = runs(i).meanCoverageRatio;
+                end
+                if isfield(runs, 'objMetricSummary') && ~isempty(runs(i).objMetricSummary)
+                    objMetricSummary{i} = runs(i).objMetricSummary;
+                end
             end
-            if loadCount >= n
+            if loadCount >= n && all(~isnan(hvLast)) && all(~isnan(meanSignal)) && all(~isnan(meanSwitchCount)) && all(~isnan(meanCoverageRatio))
                 return;
             end
         end
@@ -205,13 +253,13 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
         return;
     end
 
-    startRun = find(isnan(hvLast), 1);
+    startRun = find(isnan(hvLast) | isnan(meanSignal) | isnan(meanSwitchCount) | isnan(meanCoverageRatio), 1);
     if isempty(startRun)
         return;
     end
 
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
-    runs = struct('hv', {}, 'actualFE', {}, 'runtime', {});
+    runs = struct('hv', {}, 'actualFE', {}, 'runtime', {}, 'meanSignal', {}, 'meanSwitchCount', {}, 'meanCoverageRatio', {}, 'objMetricSummary', {});
     if exist(cacheFile, 'file') == 2
         S = load(cacheFile);
         if isfield(S, 'runs')
@@ -223,11 +271,18 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
         fprintf('\n>>> Current algorithm: %s\n', algName);
         fprintf('  Run %d/%d...\n', i, n);
         try
-            [hvSeries{i}, actualFE(i), runtime(i), lastAlgorithm, lastProblem] = runOneFn();
+            [hvSeries{i}, actualFE(i), runtime(i), objMetricSummary{i}, lastAlgorithm, lastProblem] = runOneFn();
             hvLast(i) = hvSeries{i}(end);
+            meanSignal(i) = objMetricSummary{i}.meanSignal;
+            meanSwitchCount(i) = objMetricSummary{i}.meanSwitchCount;
+            meanCoverageRatio(i) = objMetricSummary{i}.meanCoverageRatio;
             runs(i).hv = hvSeries{i};
             runs(i).actualFE = actualFE(i);
             runs(i).runtime = runtime(i);
+            runs(i).meanSignal = meanSignal(i);
+            runs(i).meanSwitchCount = meanSwitchCount(i);
+            runs(i).meanCoverageRatio = meanCoverageRatio(i);
+            runs(i).objMetricSummary = objMetricSummary{i};
             save(cacheFile, 'runs');
         catch ME
             fprintf('  Run %d/%d FAILED: %s\n', i, n, ME.message);
@@ -255,13 +310,14 @@ function actualFE = loadAllActualFE(cacheFile)
     end
 end
 
-function [hv, actualFE, runtime, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, param_DCMOCPSO)
-    Algorithm = DCMOCPSO('parameter', param_DCMOCPSO);
+function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, param_DCMOCPSO)
+    Algorithm = DCMOCPSO('parameter', param_DCMOCPSO, 'outputFcn', @(~,~)[]);
     Problem   = UAVPathPlanning('N', N, 'maxFE', maxFE, 'parameter', problemParameter);
     tStart = tic;
     Algorithm.Solve(Problem);
     runtime = toc(tStart);
     hv = extractHV(Algorithm);
+    objMetricSummary = extractObjectiveMetrics(Algorithm);
     actualFE = Problem.FE;
 end
 
@@ -270,5 +326,39 @@ function hv = extractHV(Algorithm)
     hv = m(:,2)';
     if isempty(hv)
         error('No HV metric captured. Ensure Problem.M>1 and Algorithm saved results.');
+    end
+end
+
+function objMetricSummary = extractObjectiveMetrics(Algorithm)
+    objMetricSummary = struct('meanSignal', NaN, 'meanSwitchCount', NaN, ...
+        'meanCoverageRatio', NaN, 'finalPopulationSize', 0);
+    if isempty(Algorithm.result)
+        return;
+    end
+
+    finalPopulation = Algorithm.result{end, 2};
+    if isempty(finalPopulation)
+        return;
+    end
+
+    popObj = finalPopulation.objs;
+    if isempty(popObj)
+        return;
+    end
+
+    objMetricSummary.finalPopulationSize = size(popObj, 1);
+    objMetricSummary.meanSignal = meanValid(-popObj(:, 1));
+    objMetricSummary.meanSwitchCount = meanValid(popObj(:, 2));
+    if size(popObj, 2) >= 3
+        objMetricSummary.meanCoverageRatio = meanValid(-popObj(:, 3));
+    end
+end
+
+function value = meanValid(values)
+    values = values(~isnan(values) & isfinite(values));
+    if isempty(values)
+        value = NaN;
+    else
+        value = mean(values);
     end
 end

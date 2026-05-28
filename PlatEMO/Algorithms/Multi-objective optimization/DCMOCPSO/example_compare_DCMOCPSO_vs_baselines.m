@@ -54,9 +54,9 @@ cacheFile_IMMOEAD     = fullfile(cacheDir, 'IMMOEAD_HV_runs.mat');
 cacheFile_DGEA        = fullfile(cacheDir, 'DGEA_HV_runs.mat');
 
 %% Run or load groups
-[hvLast_DCMOCPSO, hvSeries_DCMOCPSO, actualFE_DCMOCPSO, runtime_DCMOCPSO] = runOrLoad( ...
+[hvLast_DCMOCPSO, hvSeries_DCMOCPSO, actualFE_DCMOCPSO, runtime_DCMOCPSO, meanSignal_DCMOCPSO, meanSwitchCount_DCMOCPSO, meanCoverageRatio_DCMOCPSO, objMetricSummary_DCMOCPSO] = runOrLoad( ...
     'DCMOCPSO', cacheFile_DCMOCPSO, n, ...
-    @() runOneAlgorithm(@() DCMOCPSO('parameter', param_Full), N, maxFE_DCMOCPSO, problemParameter_Lookahead), ...
+    @() runOneAlgorithm(@() DCMOCPSO('parameter', param_Full, 'outputFcn', @(~,~)[]), N, maxFE_DCMOCPSO, problemParameter_Lookahead), ...
     allowRunCachedGroups);
 
 validFE_DCMOCPSO = loadAllActualFE(cacheFile_DCMOCPSO);
@@ -71,24 +71,24 @@ else
     maxFE_BaseMOCPSO = max(1, round(competitorMaxFE / numSegments));
 end
 
-[hvLast_BaseMOCPSO, hvSeries_BaseMOCPSO, actualFE_BaseMOCPSO, runtime_BaseMOCPSO] = runOrLoad( ...
+[hvLast_BaseMOCPSO, hvSeries_BaseMOCPSO, actualFE_BaseMOCPSO, runtime_BaseMOCPSO, meanSignal_BaseMOCPSO, meanSwitchCount_BaseMOCPSO, meanCoverageRatio_BaseMOCPSO, objMetricSummary_BaseMOCPSO] = runOrLoad( ...
     'Base-MOCPSO', cacheFile_BaseMOCPSO, n, ...
-    @() runOneAlgorithm(@() DCMOCPSO('parameter', param_OneSeg), N, maxFE_BaseMOCPSO, problemParameter_Lookahead), ...
+    @() runOneAlgorithm(@() DCMOCPSO('parameter', param_OneSeg, 'outputFcn', @(~,~)[]), N, maxFE_BaseMOCPSO, problemParameter_Lookahead), ...
     allowRunCachedGroups);
 
-[hvLast_DGEA, hvSeries_DGEA, actualFE_DGEA, runtime_DGEA] = runOrLoad( ...
+[hvLast_DGEA, hvSeries_DGEA, actualFE_DGEA, runtime_DGEA, meanSignal_DGEA, meanSwitchCount_DGEA, meanCoverageRatio_DGEA, objMetricSummary_DGEA] = runOrLoad( ...
     'DGEA', cacheFile_DGEA, n, ...
-    @() runOneAlgorithm(@() DGEA(), N, competitorMaxFE, problemParameter_Lookahead), ...
+    @() runOneAlgorithm(@() DGEA('outputFcn', @(~,~)[]), N, competitorMaxFE, problemParameter_Lookahead), ...
     true);
 
-[hvLast_IMMOEAD, hvSeries_IMMOEAD, actualFE_IMMOEAD, runtime_IMMOEAD] = runOrLoad( ...
+[hvLast_IMMOEAD, hvSeries_IMMOEAD, actualFE_IMMOEAD, runtime_IMMOEAD, meanSignal_IMMOEAD, meanSwitchCount_IMMOEAD, meanCoverageRatio_IMMOEAD, objMetricSummary_IMMOEAD] = runOrLoad( ...
     'IMMOEAD', cacheFile_IMMOEAD, n, ...
-    @() runOneAlgorithm(@() IMMOEAD(), N, competitorMaxFE, problemParameter_Lookahead), ...
+    @() runOneAlgorithm(@() IMMOEAD('outputFcn', @(~,~)[]), N, competitorMaxFE, problemParameter_Lookahead), ...
     true);
 
 % [hvLast_MMOPSO, hvSeries_MMOPSO, actualFE_MMOPSO, runtime_MMOPSO] = runOrLoad( ...
 %     'MMOPSO', cacheFile_MMOPSO, n, ...
-%     @() runOneAlgorithm(@() MMOPSO(), N, competitorMaxFE, problemParameter_Lookahead), ...
+%     @() runOneAlgorithm(@() MMOPSO('outputFcn', @(~,~)[]), N, competitorMaxFE, problemParameter_Lookahead), ...
 %     true);
 
 %% Summary
@@ -96,11 +96,18 @@ groupNames = {'DCMOCPSO', 'Base-MOCPSO', 'IMMOEAD', 'DGEA'};
 hvLastAll = {hvLast_DCMOCPSO, hvLast_BaseMOCPSO, hvLast_IMMOEAD, hvLast_DGEA};
 actualFEAll = {actualFE_DCMOCPSO, actualFE_BaseMOCPSO, actualFE_IMMOEAD, actualFE_DGEA};
 runtimeAll = {runtime_DCMOCPSO, runtime_BaseMOCPSO, runtime_IMMOEAD, runtime_DGEA};
+meanSignalAll = {meanSignal_DCMOCPSO, meanSignal_BaseMOCPSO, meanSignal_IMMOEAD, meanSignal_DGEA};
+meanSwitchCountAll = {meanSwitchCount_DCMOCPSO, meanSwitchCount_BaseMOCPSO, meanSwitchCount_IMMOEAD, meanSwitchCount_DGEA};
+meanCoverageRatioAll = {meanCoverageRatio_DCMOCPSO, meanCoverageRatio_BaseMOCPSO, meanCoverageRatio_IMMOEAD, meanCoverageRatio_DGEA};
+objMetricSummaryAll = {objMetricSummary_DCMOCPSO, objMetricSummary_BaseMOCPSO, objMetricSummary_IMMOEAD, objMetricSummary_DGEA};
 maxFEAll = [maxFE_DCMOCPSO, maxFE_BaseMOCPSO, competitorMaxFE, competitorMaxFE];
 
 meanHV = nan(1, numel(groupNames));
 meanRuntime = nan(1, numel(groupNames));
 meanActualFE = nan(1, numel(groupNames));
+meanSignal = nan(1, numel(groupNames));
+meanSwitchCount = nan(1, numel(groupNames));
+meanCoverageRatio = nan(1, numel(groupNames));
 validCount = zeros(1, numel(groupNames));
 
 fprintf('\n=== Algorithm comparison summary (n=%d) ===\n', n);
@@ -111,10 +118,35 @@ for i = 1:numel(groupNames)
     meanHV(i) = mean(hvLastAll{i}(validIdx));
     meanRuntime(i) = mean(runtimeAll{i}(validIdx));
     meanActualFE(i) = mean(actualFEAll{i}(validIdx));
+    meanSignal(i) = meanValid(meanSignalAll{i}(validIdx));
+    meanSwitchCount(i) = meanValid(meanSwitchCountAll{i}(validIdx));
+    meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
 
-    fprintf('%-12s : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs)\n', ...
-        groupNames{i}, meanHV(i), validCount(i), n, maxFEAll(i), meanActualFE(i), meanRuntime(i));
+    fprintf('%-12s : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+        groupNames{i}, meanHV(i), validCount(i), n, maxFEAll(i), meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
 end
+
+results = struct();
+results.experimentName = 'DCMOCPSO_vs_baselines';
+results.groupNames = groupNames;
+results.hvLastAll = hvLastAll;
+results.actualFEAll = actualFEAll;
+results.runtimeAll = runtimeAll;
+results.meanSignalAll = meanSignalAll;
+results.meanSwitchCountAll = meanSwitchCountAll;
+results.meanCoverageRatioAll = meanCoverageRatioAll;
+results.objMetricSummaryAll = objMetricSummaryAll;
+results.maxFEAll = maxFEAll;
+results.meanHV = meanHV;
+results.meanRuntime = meanRuntime;
+results.meanActualFE = meanActualFE;
+results.meanSignal = meanSignal;
+results.meanSwitchCount = meanSwitchCount;
+results.meanCoverageRatio = meanCoverageRatio;
+results.validCount = validCount;
+summaryFile = fullfile(cacheDir, 'DCMOCPSO_vs_baselines_summary.mat');
+save(summaryFile, 'results');
+fprintf('\nSummary saved to: %s\n', summaryFile);
 
 %% Plot comparisons
 colors = [
@@ -132,11 +164,15 @@ plotBarComparison('Runtime comparison', 'Mean runtime (seconds)', 'Algorithm Com
 
 
 %% ===================== local functions =====================
-function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
+function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
     hvLast = nan(1,n);
     hvSeries = cell(1,n);
     actualFE = nan(1,n);
     runtime = nan(1,n);
+    meanSignal = nan(1,n);
+    meanSwitchCount = nan(1,n);
+    meanCoverageRatio = nan(1,n);
+    objMetricSummary = cell(1,n);
     lastAlgorithm = [];
     lastProblem = [];
 
@@ -157,8 +193,20 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
                 if isfield(runs, 'runtime')
                     runtime(i) = runs(i).runtime;
                 end
+                if isfield(runs, 'meanSignal') && ~isempty(runs(i).meanSignal)
+                    meanSignal(i) = runs(i).meanSignal;
+                end
+                if isfield(runs, 'meanSwitchCount') && ~isempty(runs(i).meanSwitchCount)
+                    meanSwitchCount(i) = runs(i).meanSwitchCount;
+                end
+                if isfield(runs, 'meanCoverageRatio') && ~isempty(runs(i).meanCoverageRatio)
+                    meanCoverageRatio(i) = runs(i).meanCoverageRatio;
+                end
+                if isfield(runs, 'objMetricSummary') && ~isempty(runs(i).objMetricSummary)
+                    objMetricSummary{i} = runs(i).objMetricSummary;
+                end
             end
-            if loadCount >= n
+            if loadCount >= n && all(~isnan(hvLast)) && all(~isnan(meanSignal)) && all(~isnan(meanSwitchCount)) && all(~isnan(meanCoverageRatio))
                 return;
             end
         end
@@ -169,13 +217,13 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
         return;
     end
 
-    startRun = find(isnan(hvLast), 1);
+    startRun = find(isnan(hvLast) | isnan(meanSignal) | isnan(meanSwitchCount) | isnan(meanCoverageRatio), 1);
     if isempty(startRun)
         return;
     end
 
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
-    runs = struct('hv', {}, 'actualFE', {}, 'runtime', {});
+    runs = struct('hv', {}, 'actualFE', {}, 'runtime', {}, 'meanSignal', {}, 'meanSwitchCount', {}, 'meanCoverageRatio', {}, 'objMetricSummary', {});
     if exist(cacheFile, 'file') == 2
         S = load(cacheFile);
         if isfield(S, 'runs')
@@ -187,11 +235,18 @@ function [hvLast, hvSeries, actualFE, runtime, lastAlgorithm, lastProblem] = run
         fprintf('\n>>> Current algorithm: %s\n', algName);
         fprintf('  Run %d/%d...\n', i, n);
         try
-            [hvSeries{i}, actualFE(i), runtime(i), lastAlgorithm, lastProblem] = runOneFn();
+            [hvSeries{i}, actualFE(i), runtime(i), objMetricSummary{i}, lastAlgorithm, lastProblem] = runOneFn();
             hvLast(i) = hvSeries{i}(end);
+            meanSignal(i) = objMetricSummary{i}.meanSignal;
+            meanSwitchCount(i) = objMetricSummary{i}.meanSwitchCount;
+            meanCoverageRatio(i) = objMetricSummary{i}.meanCoverageRatio;
             runs(i).hv = hvSeries{i};
             runs(i).actualFE = actualFE(i);
             runs(i).runtime = runtime(i);
+            runs(i).meanSignal = meanSignal(i);
+            runs(i).meanSwitchCount = meanSwitchCount(i);
+            runs(i).meanCoverageRatio = meanCoverageRatio(i);
+            runs(i).objMetricSummary = objMetricSummary{i};
             save(cacheFile, 'runs');
         catch ME
             fprintf('  Run %d/%d FAILED: %s\n', i, n, ME.message);
@@ -247,13 +302,14 @@ function prepareParallelPool(enableParallelPool, poolProfile, numWorkers)
     fprintf('[Parallel] Pool ready with %d worker(s).\n', pool.NumWorkers);
 end
 
-function [hv, actualFE, runtime, Algorithm, Problem] = runOneAlgorithm(createAlgorithmFn, N, maxFE, problemParameter)
+function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOneAlgorithm(createAlgorithmFn, N, maxFE, problemParameter)
     Algorithm = createAlgorithmFn();
     Problem = UAVPathPlanning('N', N, 'maxFE', maxFE, 'parameter', problemParameter);
     tStart = tic;
     Algorithm.Solve(Problem);
     runtime = toc(tStart);
     hv = extractHV(Algorithm);
+    objMetricSummary = extractObjectiveMetrics(Algorithm);
     actualFE = Problem.FE;
 end
 
@@ -262,6 +318,40 @@ function hv = extractHV(Algorithm)
     hv = m(:,2)';
     if isempty(hv)
         error('No HV metric captured. Ensure Problem.M>1 and Algorithm saved results.');
+    end
+end
+
+function objMetricSummary = extractObjectiveMetrics(Algorithm)
+    objMetricSummary = struct('meanSignal', NaN, 'meanSwitchCount', NaN, ...
+        'meanCoverageRatio', NaN, 'finalPopulationSize', 0);
+    if isempty(Algorithm.result)
+        return;
+    end
+
+    finalPopulation = Algorithm.result{end, 2};
+    if isempty(finalPopulation)
+        return;
+    end
+
+    popObj = finalPopulation.objs;
+    if isempty(popObj)
+        return;
+    end
+
+    objMetricSummary.finalPopulationSize = size(popObj, 1);
+    objMetricSummary.meanSignal = meanValid(-popObj(:, 1));
+    objMetricSummary.meanSwitchCount = meanValid(popObj(:, 2));
+    if size(popObj, 2) >= 3
+        objMetricSummary.meanCoverageRatio = meanValid(-popObj(:, 3));
+    end
+end
+
+function value = meanValid(values)
+    values = values(~isnan(values) & isfinite(values));
+    if isempty(values)
+        value = NaN;
+    else
+        value = mean(values);
     end
 end
 

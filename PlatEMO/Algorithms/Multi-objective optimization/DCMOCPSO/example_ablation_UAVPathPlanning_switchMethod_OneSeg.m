@@ -1,60 +1,53 @@
-% example_ablation_DCMOCPSO_lookaheadDistance.m
+% example_ablation_UAVPathPlanning_switchMethod_OneSeg.m
 %
-% One-factor ablation/sensitivity study for the lookahead distance used by
-% the switchMethod=2 proactive handover algorithm in UAVPathPlanning.
+% Isolated switch-method ablation under the same OneSeg algorithm setting.
 %
-% Algorithm settings are fixed to OneSeg_Lookahead:
-%   {1, 2, 0.5, 0.3, false, false, false} + switchMethod=2
+% Compared groups:
+%   1) OneSeg           : {1, 2, 0.5, 0.3, false, false, false} + switchMethod=0
+%   2) OneSeg_A3        : {1, 2, 0.5, 0.3, false, false, false} + switchMethod=3
+%   3) OneSeg_Lookahead : {1, 2, 0.5, 0.3, false, false, false} + switchMethod=2
 %
-% The eighth UAVPathPlanning parameter is lookaheadDistance, measured in
-% meters. Each distance setting is cached independently. After every
-% successful independent run, the corresponding cache file is saved
-% immediately.
+% Each run persists HV, runtime, actualFE, mean signal strength, mean switch
+% count, and mean coverage ratio immediately after it finishes.
 
 clear; clc; close all;
 
 %% Settings
-n = 20;
+n = 10;
 
-% Start and warm up the parallel pool before per-run timing begins, so the
-% parpool startup cost is not counted in any algorithm runtime.
 enableParallelPool = true;
 parallelPoolProfile = 'Processes';
 parallelPoolNumWorkers = [];
 prepareParallelPool(enableParallelPool, parallelPoolProfile, parallelPoolNumWorkers);
 
-% UAVPathPlanning base parameters:
+N = 20;
+maxFE_OneSeg = 100;
+
+% UAVPathPlanning parameters:
 % {bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx,
 %  switchMethod, lookaheadDistance}
-N = 20;
-baseProblemParameter = {20, 20, 5, -101.5, 0, 30, 2, 500};
+problemParameter_Base = {20, 20, 5, -101.5, 0, 30, 0, 500};
+problemParameter_Base{7} = 0;
+problemParameter_A3 = problemParameter_Base;
+problemParameter_A3{7} = 3;
+problemParameter_Lookahead = problemParameter_Base;
+problemParameter_Lookahead{7} = 2;
 
-% Lookahead distances to compare. 0 means the proactive score only sees the
-% current preset waypoint; 500 is the current default used by prior scripts.
-lookaheadDistanceList = [0, 100, 300, 500, 700, 900, 1100, 1300, 1500, 1700, 1900, 2100, 2300];
-
-% OneSeg_Lookahead settings:
+% OneSeg algorithm parameters:
 % {numSegments, segmentOverlap, lambda, c_guide,
 %  useDynamicGrouping, useDynamicMutation, useEk}
-maxFE_OneSeg = 418;
 param_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
 
-% Result cache. Use experiment-specific files to avoid mixing with older
-% DCMOCPSO ablation caches.
+groupNames = {'OneSeg', 'OneSeg_A3', 'OneSeg_Lookahead'};
+groupProblemParams = {problemParameter_Base, problemParameter_A3, problemParameter_Lookahead};
+
 cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
 
-commonConfig = struct( ...
-    'N', N, ...
-    'maxFE', maxFE_OneSeg, ...
-    'baseProblemParameter', {baseProblemParameter}, ...
-    'param_OneSeg', {param_OneSeg});
-
-%% Run or load lookahead-distance groups
-numGroups = numel(lookaheadDistanceList);
-groupNames = arrayfun(@(v) sprintf('lookahead_%sm', valueTag(v)), lookaheadDistanceList, 'UniformOutput', false);
+%% Run or load groups
+numGroups = numel(groupNames);
 hvLastAll = cell(1, numGroups);
 hvSeriesAll = cell(1, numGroups);
 actualFEAll = cell(1, numGroups);
@@ -64,18 +57,14 @@ meanSwitchCountAll = cell(1, numGroups);
 meanCoverageRatioAll = cell(1, numGroups);
 objMetricSummaryAll = cell(1, numGroups);
 
-fprintf('\n=== OneSeg_Lookahead distance ablation (n=%d) ===\n', n);
-fprintf('Common settings: N=%d, maxFE=%d, param_OneSeg={1,2,0.5,0.3,false,false,false}\n', ...
-    commonConfig.N, commonConfig.maxFE);
+fprintf('\n=== OneSeg switch-method ablation (n=%d) ===\n', n);
+fprintf('Algorithm parameter fixed to param_OneSeg={1,2,0.5,0.3,false,false,false}; only switchMethod changes.\n');
 
 for i = 1:numGroups
-    lookaheadDistance = lookaheadDistanceList(i);
-    problemParameter = makeProblemParameter(baseProblemParameter, lookaheadDistance);
-    cacheFile = fullfile(cacheDir, sprintf('LookaheadDistance_OneSeg_%s_HV_objMetrics_runs.mat', groupNames{i}));
-
+    cacheFile = fullfile(cacheDir, sprintf('OneSegSwitchMethod_%s_HV_objMetrics_runs.mat', groupNames{i}));
     [hvLastAll{i}, hvSeriesAll{i}, actualFEAll{i}, runtimeAll{i}, meanSignalAll{i}, meanSwitchCountAll{i}, meanCoverageRatioAll{i}, objMetricSummaryAll{i}] = runOrLoad( ...
         groupNames{i}, cacheFile, n, ...
-        @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE, problemParameter, commonConfig.param_OneSeg), ...
+        @() runOne_DCMOCPSO(N, maxFE_OneSeg, groupProblemParams{i}, param_OneSeg), ...
         true);
 end
 
@@ -93,7 +82,7 @@ meanCoverageRatio = nan(1, numGroups);
 stdCoverageRatio = nan(1, numGroups);
 validCount = zeros(1, numGroups);
 
-fprintf('\n--- Lookahead distance summary ---\n');
+fprintf('\n--- OneSeg switch-method summary ---\n');
 for i = 1:numGroups
     validIdx = ~isnan(hvLastAll{i});
     validCount(i) = sum(validIdx);
@@ -109,15 +98,16 @@ for i = 1:numGroups
     meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
     stdCoverageRatio(i) = stdValid(meanCoverageRatioAll{i}(validIdx));
 
-    fprintf('%-18s : lookaheadDistance=%g m, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, std=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-        groupNames{i}, lookaheadDistanceList(i), meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), stdRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
+    fprintf('%-18s : switchMethod=%d, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+        groupNames{i}, groupProblemParams{i}{7}, meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
 end
 
 results = struct();
-results.experimentName = 'LookaheadDistanceOneSegSweep';
+results.experimentName = 'OneSegSwitchMethodAblation';
 results.groupNames = groupNames;
-results.lookaheadDistanceList = lookaheadDistanceList;
-results.commonConfig = commonConfig;
+results.groupProblemParams = groupProblemParams;
+results.param_OneSeg = param_OneSeg;
+results.maxFE_OneSeg = maxFE_OneSeg;
 results.hvLastAll = hvLastAll;
 results.hvSeriesAll = hvSeriesAll;
 results.actualFEAll = actualFEAll;
@@ -139,31 +129,34 @@ results.meanCoverageRatio = meanCoverageRatio;
 results.stdCoverageRatio = stdCoverageRatio;
 results.validCount = validCount;
 
-summaryFile = fullfile(cacheDir, 'LookaheadDistance_OneSeg_sweep_summary.mat');
+summaryFile = fullfile(cacheDir, 'OneSegSwitchMethod_ablation_summary.mat');
 save(summaryFile, 'results');
 fprintf('\nSummary saved to: %s\n', summaryFile);
 
 %% Plot comparisons
-colors = lines(numGroups);
+colors = [
+    0.78, 0.20, 0.18
+    0.50, 0.30, 0.70
+    0.20, 0.42, 0.78
+];
 
-plotBarComparison('lookahead distance sweep HV', 'Mean of last HV', ...
-    'OneSeg_Lookahead distance sweep: HV', groupNames, meanHV, stdHV, colors, [200, 200, 860, 520], true);
+plotBarComparison('OneSeg switch-method HV', 'Mean of last HV', ...
+    'OneSeg switch-method ablation: HV', groupNames, meanHV, stdHV, colors, [200, 200, 760, 500], true);
 
-plotBarComparison('lookahead distance sweep runtime', 'Mean runtime (seconds)', ...
-    'OneSeg_Lookahead distance sweep: Runtime', groupNames, meanRuntime, stdRuntime, colors, [1120, 200, 860, 520], false);
+plotBarComparison('OneSeg switch-method signal', 'Mean signal strength (dBm)', ...
+    'OneSeg switch-method ablation: Signal', groupNames, meanSignal, stdSignal, colors, [980, 200, 760, 500], true);
+
+plotBarComparison('OneSeg switch-method switch count', 'Mean switch count', ...
+    'OneSeg switch-method ablation: Switch Count', groupNames, meanSwitchCount, stdSwitchCount, colors, [200, 780, 760, 500], true);
+
+plotBarComparison('OneSeg switch-method coverage', 'Mean coverage ratio', ...
+    'OneSeg switch-method ablation: Coverage', groupNames, meanCoverageRatio, stdCoverageRatio, colors, [980, 780, 760, 500], true);
+
+plotBarComparison('OneSeg switch-method runtime', 'Mean runtime (seconds)', ...
+    'OneSeg switch-method ablation: Runtime', groupNames, meanRuntime, stdRuntime, colors, [560, 1360, 760, 500], false);
 
 
 %% ===================== local functions =====================
-function problemParameter = makeProblemParameter(baseProblemParameter, lookaheadDistance)
-    problemParameter = baseProblemParameter;
-    problemParameter{7} = 2;
-    problemParameter{8} = lookaheadDistance;
-end
-
-function tag = valueTag(value)
-    tag = strrep(sprintf('%g', value), '.', 'p');
-end
-
 function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
     hvLast = nan(1,n);
     hvSeries = cell(1,n);
@@ -358,7 +351,6 @@ function plotBarComparison(figName, yLabelText, titleText, groupNames, values, e
     ylabel(yLabelText, 'FontSize', 12, 'FontWeight', 'bold');
     title(titleText, 'FontSize', 14, 'FontWeight', 'bold');
     grid on;
-    xtickangle(20);
 
     if smartYLim
         validValues = values(~isnan(values));

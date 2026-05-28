@@ -46,6 +46,8 @@ classdef UAVPathPlanning < PROBLEM
         switchThreshold; % 切换阈值（dBm）
         switchMethod;    % 切换算法选择（0=基于阈值，1=CASH，2=前瞻性，3=A3）
         lookaheadDistance; % 前向展望距离（米），仅switchMethod=2时使用
+        lookaheadHysteresisRange; % 前瞻性算法动态迟滞余量范围（dB），仅switchMethod=2时使用
+        lookaheadSafetyMargin; % 前瞻性算法安全裕度（dB），仅switchMethod=2时使用
         P_tx;            % 无人机发射功率（dBm）
         obstacleMethod;  % 障碍物与预设路径生成方法（固定为0，基于αβγ的方法）
         alpha;           % 城市密度比（建筑总面积与土地总面积的比值，0.1~0.5）
@@ -125,7 +127,7 @@ classdef UAVPathPlanning < PROBLEM
             userUpper = obj.upper;
             
             % 获取参数（使用ParameterSet获取，如果obj.parameter被指定则使用，否则使用默认值）
-            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod, lookaheadDistance}
+            % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod, lookaheadDistance, lookaheadHysteresisRange, lookaheadSafetyMargin}
             %   bsPerKm2: 每平方公里的基站数量
             %   velocity: 无人机最大速度（m/s）
             %   TTT: 时间间隔（s）
@@ -139,6 +141,8 @@ classdef UAVPathPlanning < PROBLEM
             %       3 = A3切换算法（候选基站信号 > 当前服务基站信号 + 固定迟滞余量）
             %       默认值：0
             %   lookaheadDistance: 前向展望距离（米），仅switchMethod=2时使用，默认500
+            %   lookaheadHysteresisRange: 前瞻性算法动态迟滞余量范围（dB），仅switchMethod=2时使用，默认10
+            %   lookaheadSafetyMargin: 前瞻性算法安全裕度（dB），仅switchMethod=2时使用，默认4
             % 注意：不再需要numWaypoints参数，航点数量将自动计算
             if isempty(obj.parameter)
                 bsPerKm2 = 10;  % 默认每平方公里10个基站
@@ -148,6 +152,9 @@ classdef UAVPathPlanning < PROBLEM
                 obstacleMethod = 0;  % 0 = 基于αβγ的新方法
                 P_tx = 30;  % 默认发射功率30dBm
                 switchMethod = 0;  % 默认使用基于阈值的切换
+                lookaheadDistance = 500;  % 默认500米
+                lookaheadHysteresisRange = 10;  % 默认10dB
+                lookaheadSafetyMargin = 4;  % 默认4dB
             else
                 params = obj.parameter;
                 if iscell(params) && length(params) >= 4
@@ -180,6 +187,16 @@ classdef UAVPathPlanning < PROBLEM
                     else
                         lookaheadDistance = 500;  % 默认500米
                     end
+                    if length(params) >= 9
+                        lookaheadHysteresisRange = params{9};  % 前瞻性算法动态迟滞余量范围（dB）
+                    else
+                        lookaheadHysteresisRange = 10;  % 默认10dB
+                    end
+                    if length(params) >= 10
+                        lookaheadSafetyMargin = params{10};  % 前瞻性算法安全裕度（dB）
+                    else
+                        lookaheadSafetyMargin = 4;  % 默认4dB
+                    end
                 else
                     bsPerKm2 = 10;  % 默认每平方公里10个基站
                     velocity = 10;
@@ -189,6 +206,8 @@ classdef UAVPathPlanning < PROBLEM
                     P_tx = 30;  % 默认发射功率30dBm
                     switchMethod = 0;  % 默认使用基于阈值的切换
                     lookaheadDistance = 500;  % 默认500米
+                    lookaheadHysteresisRange = 10;  % 默认10dB
+                    lookaheadSafetyMargin = 4;  % 默认4dB
                 end
             end
             
@@ -204,6 +223,8 @@ classdef UAVPathPlanning < PROBLEM
             obj.P_tx = P_tx;  % 保存无人机发射功率
             obj.switchMethod = switchMethod;  % 保存切换算法选择
             obj.lookaheadDistance = lookaheadDistance;  % 保存前向展望距离
+            obj.lookaheadHysteresisRange = lookaheadHysteresisRange;  % 保存前瞻性算法动态迟滞余量范围
+            obj.lookaheadSafetyMargin = lookaheadSafetyMargin;  % 保存前瞻性算法安全裕度
             
             % 覆盖半径不再使用固定值：覆盖半径取每个航点当前高度z（r = waypoint(3)）
             % 因此这里不再设置obj.coverageRadius
@@ -954,7 +975,7 @@ classdef UAVPathPlanning < PROBLEM
                             % Δ0 = 10 dB, Δ_min = 1 dB
                             % 速度越快 → 迟滞余量越小（切换更灵敏）
                             % 信号越强 → 迟滞余量越大（抑制频繁切换）
-                            delta_hysteresis_range = 10;  % Δ0：迟滞余量范围（dB）
+                            delta_hysteresis_range = obj.lookaheadHysteresisRange;  % Δ0：迟滞余量范围（dB）
                             delta_hysteresis_min = 1;     % Δ_min：最小迟滞余量（dB）
                             RSRP_max = -31.4;             % 信号参考上限（dBm）
                             RSRP_ref = -110;              % 信号参考下限（dBm）
@@ -986,7 +1007,7 @@ classdef UAVPathPlanning < PROBLEM
                                 
                                 % 安全判断：当前信号过低时强制切换
                                 % 条件②：当前信号 ≤ 切换阈值 + 安全裕度
-                                condition2 = currentSignal <= obj.switchThreshold + delta;
+                                condition2 = currentSignal <= obj.switchThreshold + obj.lookaheadSafetyMargin;
                                 
                                 % 满足任一条件才执行切换
                                 if condition1 || condition2

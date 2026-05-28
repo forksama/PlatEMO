@@ -33,7 +33,7 @@ fprintf('=== 运行DCMOCPSO优化算法 ===\n');
 %              40-60%迭代:  1.0x (标准)
 %              60-80%迭代:  0.75x
 %              80-100%迭代: 0.5x (强化收敛)
-Algorithm = DCMOCPSO('parameter', {5, 2, 0.5, 0.3, true, true});
+Algorithm = DCMOCPSO('parameter', {5, 2, 0.5, 0.3, true, true}, 'outputFcn', @(~,~)[]);
 
 % 创建UAVPathPlanning问题
 % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod, lookaheadDistance}
