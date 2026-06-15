@@ -125,6 +125,8 @@ classdef UAVPathPlanning < PROBLEM
             % 保存用户可能传递的lower和upper（如果有），但会在计算D后重新设置
             userLower = obj.lower;
             userUpper = obj.upper;
+            presetAltitude = NaN;
+            altitudeBounds = [];
             
             % 获取参数（使用ParameterSet获取，如果obj.parameter被指定则使用，否则使用默认值）
             % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod, lookaheadDistance, lookaheadHysteresisRange, lookaheadSafetyMargin}
@@ -187,15 +189,21 @@ classdef UAVPathPlanning < PROBLEM
                     else
                         lookaheadDistance = 500;  % 默认500米
                     end
-                    if length(params) >= 9
+                    if length(params) >= 9 && ~isempty(params{9})
                         lookaheadHysteresisRange = params{9};  % 前瞻性算法动态迟滞余量范围（dB）
                     else
                         lookaheadHysteresisRange = 10;  % 默认10dB
                     end
-                    if length(params) >= 10
+                    if length(params) >= 10 && ~isempty(params{10})
                         lookaheadSafetyMargin = params{10};  % 前瞻性算法安全裕度（dB）
                     else
                         lookaheadSafetyMargin = 4;  % 默认4dB
+                    end
+                    if length(params) >= 11
+                        presetAltitude = params{11};
+                    end
+                    if length(params) >= 12
+                        altitudeBounds = params{12};
                     end
                 else
                     bsPerKm2 = 10;  % 默认每平方公里10个基站
@@ -341,6 +349,9 @@ classdef UAVPathPlanning < PROBLEM
             
             obj.presetPath = presetPath;
             obj.baseStations = baseStations;
+            if ~isnan(presetAltitude)
+                obj.presetPath(:, 3) = presetAltitude;
+            end
             
             % 如果xyBound未设置（从文件加载时可能不存在），根据当前的presetPath生成
             if isempty(obj.xyBound)
@@ -374,6 +385,23 @@ classdef UAVPathPlanning < PROBLEM
             % 在预设路径上按距离均匀分布生成预设航点
             % 同时生成waypointSegmentMapping（航点到路径段的映射）
             obj.presetWaypoints = obj.generateUniformWaypoints();
+
+            if isempty(altitudeBounds)
+                zLower = 30;
+                zUpper = 70;
+            else
+                altitudeBounds = altitudeBounds(:)';
+                if numel(altitudeBounds) ~= 2 || any(~isfinite(altitudeBounds))
+                    error('UAVPathPlanning:InvalidAltitudeBounds', ...
+                        'altitudeBounds must be a finite two-element vector [zLower, zUpper].');
+                end
+                zLower = altitudeBounds(1);
+                zUpper = altitudeBounds(2);
+                if zLower > zUpper
+                    error('UAVPathPlanning:InvalidAltitudeBounds', ...
+                        'altitudeBounds lower value must be <= upper value.');
+                end
+            end
             
             % 注意：waypointSegmentMapping会在generateUniformWaypoints中自动生成
             % 即使从文件加载，也会根据presetPath重新生成，确保一致性
@@ -407,7 +435,7 @@ classdef UAVPathPlanning < PROBLEM
                     obj.lower(i) = y_lower;
                 end
                 for i = 3:3:obj.D  % z坐标（第3, 6, 9, ...列）
-                    obj.lower(i) = 30;  % z在30-70米范围
+                    obj.lower(i) = zLower;  % z在30-70米范围
                 end
             end
             
@@ -443,7 +471,7 @@ classdef UAVPathPlanning < PROBLEM
                     obj.upper(i) = y_upper;
                 end
                 for i = 3:3:obj.D  % z坐标（第3, 6, 9, ...列）
-                    obj.upper(i) = 70;  % z在30-70米范围
+                    obj.upper(i) = zUpper;  % z在30-70米范围
                 end
             end
             
