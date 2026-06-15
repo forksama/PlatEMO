@@ -44,7 +44,7 @@ fixedCGuide = 0.3;
 
 % Result cache. Use experiment-specific files to avoid mixing with older
 % DCMOCPSO ablation caches.
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results');
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'lambda_cguide');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
@@ -92,21 +92,31 @@ fprintf('\nCombined summary saved to: %s\n', combinedSummaryFile);
 colorsLambda = lines(numel(lambdaList));
 colorsCGuide = lines(numel(cGuideList));
 
-plotBarComparison('lambda sweep HV', 'Mean of last HV', ...
-    sprintf('DCMOCPSO lambda sweep: c\\_guide = %.2f', fixedCGuide), ...
-    lambdaGroupNames, lambdaResults.meanHV, lambdaResults.stdHV, colorsLambda, [200, 200, 860, 520], true);
+figure('Name', 'Lambda sweep metrics', ...
+    'Color', 'w', 'Position', [200, 200, 1200, 520]);
+layout = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+title(layout, sprintf('DCMOCPSO lambda sweep: c\\_guide = %.2f', fixedCGuide), 'FontSize', 14, 'FontWeight', 'bold');
 
-plotBarComparison('lambda sweep runtime', 'Mean runtime (seconds)', ...
-    sprintf('DCMOCPSO lambda sweep runtime: c\\_guide = %.2f', fixedCGuide), ...
-    lambdaGroupNames, lambdaResults.meanRuntime, lambdaResults.stdRuntime, colorsLambda, [1120, 200, 860, 520], false);
+plotBarComparison(nexttile(layout), 'Mean of last HV', ...
+    sprintf('lambda sweep: c\\_guide = %.2f', fixedCGuide), ...
+    lambdaGroupNames, lambdaResults.meanHV, lambdaResults.stdHV, colorsLambda, true);
 
-plotBarComparison('c_guide sweep HV', 'Mean of last HV', ...
-    sprintf('DCMOCPSO c\\_guide sweep: lambda = %.2f', fixedLambda), ...
-    cGuideGroupNames, cGuideResults.meanHV, cGuideResults.stdHV, colorsCGuide, [200, 780, 860, 520], true);
+plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
+    sprintf('lambda runtime: c\\_guide = %.2f', fixedCGuide), ...
+    lambdaGroupNames, lambdaResults.meanRuntime, lambdaResults.stdRuntime, colorsLambda, false);
 
-plotBarComparison('c_guide sweep runtime', 'Mean runtime (seconds)', ...
-    sprintf('DCMOCPSO c\\_guide sweep runtime: lambda = %.2f', fixedLambda), ...
-    cGuideGroupNames, cGuideResults.meanRuntime, cGuideResults.stdRuntime, colorsCGuide, [1120, 780, 860, 520], false);
+figure('Name', 'c_guide sweep metrics', ...
+    'Color', 'w', 'Position', [200, 780, 1200, 520]);
+layout = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+title(layout, sprintf('DCMOCPSO c\\_guide sweep: lambda = %.2f', fixedLambda), 'FontSize', 14, 'FontWeight', 'bold');
+
+plotBarComparison(nexttile(layout), 'Mean of last HV', ...
+    sprintf('c\\_guide sweep: lambda = %.2f', fixedLambda), ...
+    cGuideGroupNames, cGuideResults.meanHV, cGuideResults.stdHV, colorsCGuide, true);
+
+plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
+    sprintf('c\\_guide runtime: lambda = %.2f', fixedLambda), ...
+    cGuideGroupNames, cGuideResults.meanRuntime, cGuideResults.stdRuntime, colorsCGuide, false);
 
 
 %% ===================== local functions =====================
@@ -230,6 +240,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
     lastProblem = [];
 
     runs = struct('hv', {}, 'actualFE', {}, 'runtime', {}, 'meanSignal', {}, 'meanSwitchCount', {}, 'meanCoverageRatio', {}, 'objMetricSummary', {});
+    loadCount = 0;
     if exist(cacheFile, 'file') == 2
         S = load(cacheFile);
         if isfield(S, 'runs')
@@ -260,7 +271,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
                     objMetricSummary{i} = runs(i).objMetricSummary;
                 end
             end
-            if loadCount >= n && all(~isnan(hvLast)) && all(~isnan(meanSignal)) && all(~isnan(meanSwitchCount)) && all(~isnan(meanCoverageRatio))
+            if loadCount >= n
                 return;
             end
         end
@@ -271,10 +282,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
         return;
     end
 
-    startRun = find(isnan(hvLast) | isnan(meanSignal) | isnan(meanSwitchCount) | isnan(meanCoverageRatio), 1);
-    if isempty(startRun)
-        return;
-    end
+    startRun = loadCount + 1;
 
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
 
@@ -393,25 +401,22 @@ function value = stdValid(values)
     end
 end
 
-function plotBarComparison(figName, yLabelText, titleText, groupNames, values, errors, colors, position, smartYLim)
-    figure('Name', figName, 'Position', position);
-    x = categorical(groupNames);
-    x = reordercats(x, groupNames);
-
-    b = bar(x, values);
+function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors, colors, smartYLim)
+    x = 1:numel(groupNames);
+    b = bar(ax, x, values);
     b.FaceColor = 'flat';
     for i = 1:size(colors, 1)
         b.CData(i,:) = colors(i,:);
     end
-    hold on;
+    hold(ax, 'on');
 
-    xPos = 1:numel(groupNames);
-    errorbar(xPos, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
+    errorbar(ax, x, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
 
-    ylabel(yLabelText, 'FontSize', 12, 'FontWeight', 'bold');
-    title(titleText, 'FontSize', 14, 'FontWeight', 'bold');
-    grid on;
-    xtickangle(20);
+    set(ax, 'XTick', x, 'XTickLabel', groupNames, 'FontSize', 10);
+    ylabel(ax, yLabelText, 'FontSize', 11, 'FontWeight', 'bold');
+    title(ax, titleText, 'FontSize', 12, 'FontWeight', 'bold');
+    grid(ax, 'on');
+    xtickangle(ax, 20);
 
     if smartYLim
         validValues = values(~isnan(values));
@@ -423,9 +428,9 @@ function plotBarComparison(figName, yLabelText, titleText, groupNames, values, e
             vRange = vMax - vMin;
             if vRange > 0
                 margin = vRange * 0.15;
-                ylim([vMin - margin, vMax + margin]);
+                ylim(ax, [vMin - margin, vMax + margin]);
             elseif vMin ~= 0
-                ylim([vMin * 0.95, vMin * 1.05]);
+                ylim(ax, [vMin * 0.95, vMin * 1.05]);
             end
         end
     end

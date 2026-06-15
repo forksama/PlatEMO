@@ -1,11 +1,15 @@
 % example_ablation_UAVPathPlanning_switchMethod_OneSeg.m
 %
-% Isolated switch-method ablation under the same OneSeg algorithm setting.
+% Isolated switch-method ablation under the same OneSeg algorithm setting
+% across multiple maxFE budgets.
 %
-% Compared groups:
+% Compared groups for each maxFE_OneSeg:
 %   1) OneSeg           : {1, 2, 0.5, 0.3, false, false, false} + switchMethod=0
 %   2) OneSeg_A3        : {1, 2, 0.5, 0.3, false, false, false} + switchMethod=3
 %   3) OneSeg_Lookahead : {1, 2, 0.5, 0.3, false, false, false} + switchMethod=2
+%
+% The maxFE=400 case reuses the existing unprefixed cache files. The
+% maxFE=200 and maxFE=800 cases use FE-prefixed cache files.
 %
 % Each run persists HV, runtime, actualFE, mean signal strength, mean switch
 % count, and mean coverage ratio immediately after it finishes.
@@ -13,7 +17,7 @@
 clear; clc; close all;
 
 %% Settings
-n = 10;
+n = 20;
 
 enableParallelPool = true;
 parallelPoolProfile = 'Processes';
@@ -21,7 +25,7 @@ parallelPoolNumWorkers = [];
 prepareParallelPool(enableParallelPool, parallelPoolProfile, parallelPoolNumWorkers);
 
 N = 20;
-maxFE_OneSeg = 100;
+maxFE_OneSegList = [200, 400, 800];
 
 % UAVPathPlanning parameters:
 % {bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx,
@@ -41,122 +45,163 @@ param_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
 groupNames = {'OneSeg', 'OneSeg_A3', 'OneSeg_Lookahead'};
 groupProblemParams = {problemParameter_Base, problemParameter_A3, problemParameter_Lookahead};
 
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results');
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'switch_method_oneseg');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
 
-%% Run or load groups
-numGroups = numel(groupNames);
-hvLastAll = cell(1, numGroups);
-hvSeriesAll = cell(1, numGroups);
-actualFEAll = cell(1, numGroups);
-runtimeAll = cell(1, numGroups);
-meanSignalAll = cell(1, numGroups);
-meanSwitchCountAll = cell(1, numGroups);
-meanCoverageRatioAll = cell(1, numGroups);
-objMetricSummaryAll = cell(1, numGroups);
+setResults = cell(1, numel(maxFE_OneSegList));
 
-fprintf('\n=== OneSeg switch-method ablation (n=%d) ===\n', n);
-fprintf('Algorithm parameter fixed to param_OneSeg={1,2,0.5,0.3,false,false,false}; only switchMethod changes.\n');
+%% Run each maxFE budget
+for setIdx = 1:numel(maxFE_OneSegList)
+    maxFE_OneSeg = maxFE_OneSegList(setIdx);
+    fprintf('\n\n================ OneSeg switch-method ablation: maxFE = %d ================\n', maxFE_OneSeg);
+    fprintf('Algorithm parameter fixed to param_OneSeg={1,2,0.5,0.3,false,false,false}; only switchMethod changes.\n');
 
-for i = 1:numGroups
-    cacheFile = fullfile(cacheDir, sprintf('OneSegSwitchMethod_%s_HV_objMetrics_runs.mat', groupNames{i}));
-    [hvLastAll{i}, hvSeriesAll{i}, actualFEAll{i}, runtimeAll{i}, meanSignalAll{i}, meanSwitchCountAll{i}, meanCoverageRatioAll{i}, objMetricSummaryAll{i}] = runOrLoad( ...
-        groupNames{i}, cacheFile, n, ...
-        @() runOne_DCMOCPSO(N, maxFE_OneSeg, groupProblemParams{i}, param_OneSeg), ...
-        true);
+    numGroups = numel(groupNames);
+    hvLastAll = cell(1, numGroups);
+    hvSeriesAll = cell(1, numGroups);
+    actualFEAll = cell(1, numGroups);
+    runtimeAll = cell(1, numGroups);
+    meanSignalAll = cell(1, numGroups);
+    meanSwitchCountAll = cell(1, numGroups);
+    meanCoverageRatioAll = cell(1, numGroups);
+    objMetricSummaryAll = cell(1, numGroups);
+
+    for i = 1:numGroups
+        cacheFile = makeCacheFile(cacheDir, groupNames{i}, maxFE_OneSeg);
+        [hvLastAll{i}, hvSeriesAll{i}, actualFEAll{i}, runtimeAll{i}, meanSignalAll{i}, meanSwitchCountAll{i}, meanCoverageRatioAll{i}, objMetricSummaryAll{i}] = runOrLoad( ...
+            sprintf('FE%d/%s', maxFE_OneSeg, groupNames{i}), cacheFile, n, ...
+            @() runOne_DCMOCPSO(N, maxFE_OneSeg, groupProblemParams{i}, param_OneSeg), ...
+            true);
+    end
+
+    setResults{setIdx} = summarizeSet( ...
+        sprintf('FE%d', maxFE_OneSeg), maxFE_OneSeg, groupNames, groupProblemParams, ...
+        param_OneSeg, hvLastAll, hvSeriesAll, actualFEAll, runtimeAll, ...
+        meanSignalAll, meanSwitchCountAll, meanCoverageRatioAll, objMetricSummaryAll, n);
+
+    plotSetResults(setResults{setIdx});
 end
 
-%% Summary
-meanHV = nan(1, numGroups);
-stdHV = nan(1, numGroups);
-meanRuntime = nan(1, numGroups);
-stdRuntime = nan(1, numGroups);
-meanActualFE = nan(1, numGroups);
-meanSignal = nan(1, numGroups);
-stdSignal = nan(1, numGroups);
-meanSwitchCount = nan(1, numGroups);
-stdSwitchCount = nan(1, numGroups);
-meanCoverageRatio = nan(1, numGroups);
-stdCoverageRatio = nan(1, numGroups);
-validCount = zeros(1, numGroups);
-
-fprintf('\n--- OneSeg switch-method summary ---\n');
-for i = 1:numGroups
-    validIdx = ~isnan(hvLastAll{i});
-    validCount(i) = sum(validIdx);
-    meanHV(i) = mean(hvLastAll{i}(validIdx));
-    stdHV(i) = std(hvLastAll{i}(validIdx));
-    meanRuntime(i) = mean(runtimeAll{i}(validIdx));
-    stdRuntime(i) = std(runtimeAll{i}(validIdx));
-    meanActualFE(i) = mean(actualFEAll{i}(validIdx));
-    meanSignal(i) = meanValid(meanSignalAll{i}(validIdx));
-    stdSignal(i) = stdValid(meanSignalAll{i}(validIdx));
-    meanSwitchCount(i) = meanValid(meanSwitchCountAll{i}(validIdx));
-    stdSwitchCount(i) = stdValid(meanSwitchCountAll{i}(validIdx));
-    meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
-    stdCoverageRatio(i) = stdValid(meanCoverageRatioAll{i}(validIdx));
-
-    fprintf('%-18s : switchMethod=%d, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-        groupNames{i}, groupProblemParams{i}{7}, meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
-end
-
+%% Save combined summary
 results = struct();
-results.experimentName = 'OneSegSwitchMethodAblation';
+results.experimentName = 'OneSegSwitchMethodAblation_FE_sweep';
+results.maxFE_OneSegList = maxFE_OneSegList;
 results.groupNames = groupNames;
 results.groupProblemParams = groupProblemParams;
 results.param_OneSeg = param_OneSeg;
-results.maxFE_OneSeg = maxFE_OneSeg;
-results.hvLastAll = hvLastAll;
-results.hvSeriesAll = hvSeriesAll;
-results.actualFEAll = actualFEAll;
-results.runtimeAll = runtimeAll;
-results.meanSignalAll = meanSignalAll;
-results.meanSwitchCountAll = meanSwitchCountAll;
-results.meanCoverageRatioAll = meanCoverageRatioAll;
-results.objMetricSummaryAll = objMetricSummaryAll;
-results.meanHV = meanHV;
-results.stdHV = stdHV;
-results.meanRuntime = meanRuntime;
-results.stdRuntime = stdRuntime;
-results.meanActualFE = meanActualFE;
-results.meanSignal = meanSignal;
-results.stdSignal = stdSignal;
-results.meanSwitchCount = meanSwitchCount;
-results.stdSwitchCount = stdSwitchCount;
-results.meanCoverageRatio = meanCoverageRatio;
-results.stdCoverageRatio = stdCoverageRatio;
-results.validCount = validCount;
+results.n = n;
+results.setResults = setResults;
 
-summaryFile = fullfile(cacheDir, 'OneSegSwitchMethod_ablation_summary.mat');
+summaryFile = fullfile(cacheDir, 'OneSegSwitchMethod_FE_sweep_summary.mat');
 save(summaryFile, 'results');
-fprintf('\nSummary saved to: %s\n', summaryFile);
-
-%% Plot comparisons
-colors = [
-    0.78, 0.20, 0.18
-    0.50, 0.30, 0.70
-    0.20, 0.42, 0.78
-];
-
-plotBarComparison('OneSeg switch-method HV', 'Mean of last HV', ...
-    'OneSeg switch-method ablation: HV', groupNames, meanHV, stdHV, colors, [200, 200, 760, 500], true);
-
-plotBarComparison('OneSeg switch-method signal', 'Mean signal strength (dBm)', ...
-    'OneSeg switch-method ablation: Signal', groupNames, meanSignal, stdSignal, colors, [980, 200, 760, 500], true);
-
-plotBarComparison('OneSeg switch-method switch count', 'Mean switch count', ...
-    'OneSeg switch-method ablation: Switch Count', groupNames, meanSwitchCount, stdSwitchCount, colors, [200, 780, 760, 500], true);
-
-plotBarComparison('OneSeg switch-method coverage', 'Mean coverage ratio', ...
-    'OneSeg switch-method ablation: Coverage', groupNames, meanCoverageRatio, stdCoverageRatio, colors, [980, 780, 760, 500], true);
-
-plotBarComparison('OneSeg switch-method runtime', 'Mean runtime (seconds)', ...
-    'OneSeg switch-method ablation: Runtime', groupNames, meanRuntime, stdRuntime, colors, [560, 1360, 760, 500], false);
+fprintf('\nCombined summary saved to: %s\n', summaryFile);
 
 
 %% ===================== local functions =====================
+function cacheFile = makeCacheFile(cacheDir, groupName, maxFE_OneSeg)
+    if maxFE_OneSeg == 400
+        cacheFile = fullfile(cacheDir, sprintf('OneSegSwitchMethod_%s_HV_objMetrics_runs.mat', groupName));
+    else
+        cacheFile = fullfile(cacheDir, sprintf('FE%d_OneSegSwitchMethod_%s_HV_objMetrics_runs.mat', maxFE_OneSeg, groupName));
+    end
+end
+
+function result = summarizeSet(setName, maxFE_OneSeg, groupNames, groupProblemParams, param_OneSeg, hvLastAll, hvSeriesAll, actualFEAll, runtimeAll, meanSignalAll, meanSwitchCountAll, meanCoverageRatioAll, objMetricSummaryAll, n)
+    numGroups = numel(groupNames);
+    meanHV = nan(1, numGroups);
+    stdHV = nan(1, numGroups);
+    meanRuntime = nan(1, numGroups);
+    stdRuntime = nan(1, numGroups);
+    meanActualFE = nan(1, numGroups);
+    meanSignal = nan(1, numGroups);
+    stdSignal = nan(1, numGroups);
+    meanSwitchCount = nan(1, numGroups);
+    stdSwitchCount = nan(1, numGroups);
+    meanCoverageRatio = nan(1, numGroups);
+    stdCoverageRatio = nan(1, numGroups);
+    validCount = zeros(1, numGroups);
+
+    fprintf('\n--- OneSeg switch-method summary (%s, n=%d) ---\n', setName, n);
+    for i = 1:numGroups
+        validIdx = ~isnan(hvLastAll{i});
+        validCount(i) = sum(validIdx);
+        meanHV(i) = meanValid(hvLastAll{i}(validIdx));
+        stdHV(i) = stdValid(hvLastAll{i}(validIdx));
+        meanRuntime(i) = meanValid(runtimeAll{i}(validIdx));
+        stdRuntime(i) = stdValid(runtimeAll{i}(validIdx));
+        meanActualFE(i) = meanValid(actualFEAll{i}(validIdx));
+        meanSignal(i) = meanValid(meanSignalAll{i}(validIdx));
+        stdSignal(i) = stdValid(meanSignalAll{i}(validIdx));
+        meanSwitchCount(i) = meanValid(meanSwitchCountAll{i}(validIdx));
+        stdSwitchCount(i) = stdValid(meanSwitchCountAll{i}(validIdx));
+        meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
+        stdCoverageRatio(i) = stdValid(meanCoverageRatioAll{i}(validIdx));
+
+        fprintf('%-18s : switchMethod=%d, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+            groupNames{i}, groupProblemParams{i}{7}, meanHV(i), stdHV(i), validCount(i), n, maxFE_OneSeg, meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
+    end
+
+    result = struct();
+    result.setName = setName;
+    result.maxFE_OneSeg = maxFE_OneSeg;
+    result.groupNames = groupNames;
+    result.groupProblemParams = groupProblemParams;
+    result.param_OneSeg = param_OneSeg;
+    result.hvLastAll = hvLastAll;
+    result.hvSeriesAll = hvSeriesAll;
+    result.actualFEAll = actualFEAll;
+    result.runtimeAll = runtimeAll;
+    result.meanSignalAll = meanSignalAll;
+    result.meanSwitchCountAll = meanSwitchCountAll;
+    result.meanCoverageRatioAll = meanCoverageRatioAll;
+    result.objMetricSummaryAll = objMetricSummaryAll;
+    result.meanHV = meanHV;
+    result.stdHV = stdHV;
+    result.meanRuntime = meanRuntime;
+    result.stdRuntime = stdRuntime;
+    result.meanActualFE = meanActualFE;
+    result.meanSignal = meanSignal;
+    result.stdSignal = stdSignal;
+    result.meanSwitchCount = meanSwitchCount;
+    result.stdSwitchCount = stdSwitchCount;
+    result.meanCoverageRatio = meanCoverageRatio;
+    result.stdCoverageRatio = stdCoverageRatio;
+    result.validCount = validCount;
+end
+
+function plotSetResults(result)
+    colors = [
+        0.78, 0.20, 0.18
+        0.50, 0.30, 0.70
+        0.20, 0.42, 0.78
+    ];
+    titlePrefix = sprintf('OneSeg switch-method ablation %s', result.setName);
+
+    figure('Name', sprintf('%s switch-method metrics', result.setName), ...
+        'Color', 'w', 'Position', [200, 200, 1500, 900]);
+    layout = tiledlayout(2, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(layout, titlePrefix, 'FontSize', 14, 'FontWeight', 'bold');
+
+    plotBarComparison(nexttile(layout), 'Mean of last HV', ...
+        'HV', result.groupNames, result.meanHV, result.stdHV, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
+        'Runtime', result.groupNames, result.meanRuntime, result.stdRuntime, colors, false);
+
+    plotBarComparison(nexttile(layout), 'Mean signal strength (dBm)', ...
+        'Signal', result.groupNames, result.meanSignal, result.stdSignal, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean switch count', ...
+        'Switch Count', result.groupNames, result.meanSwitchCount, result.stdSwitchCount, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean coverage ratio', ...
+        'Coverage', result.groupNames, result.meanCoverageRatio, result.stdCoverageRatio, colors, true);
+
+    axis(nexttile(layout), 'off');
+end
+
 function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
     hvLast = nan(1,n);
     hvSeries = cell(1,n);
@@ -170,6 +215,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
     lastProblem = [];
 
     runs = struct('hv', {}, 'actualFE', {}, 'runtime', {}, 'meanSignal', {}, 'meanSwitchCount', {}, 'meanCoverageRatio', {}, 'objMetricSummary', {});
+    loadCount = 0;
     if exist(cacheFile, 'file') == 2
         S = load(cacheFile);
         if isfield(S, 'runs')
@@ -200,7 +246,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
                     objMetricSummary{i} = runs(i).objMetricSummary;
                 end
             end
-            if loadCount >= n && all(~isnan(hvLast)) && all(~isnan(meanSignal)) && all(~isnan(meanSwitchCount)) && all(~isnan(meanCoverageRatio))
+            if loadCount >= n
                 return;
             end
         end
@@ -211,11 +257,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
         return;
     end
 
-    startRun = find(isnan(hvLast) | isnan(meanSignal) | isnan(meanSwitchCount) | isnan(meanCoverageRatio), 1);
-    if isempty(startRun)
-        return;
-    end
-
+    startRun = loadCount + 1;
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
 
     for i = startRun:n
@@ -328,29 +370,29 @@ function value = stdValid(values)
     values = values(~isnan(values) & isfinite(values));
     if isempty(values)
         value = NaN;
+    elseif numel(values) == 1
+        value = 0;
     else
         value = std(values);
     end
 end
 
-function plotBarComparison(figName, yLabelText, titleText, groupNames, values, errors, colors, position, smartYLim)
-    figure('Name', figName, 'Position', position);
-    x = categorical(groupNames);
-    x = reordercats(x, groupNames);
+function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors, colors, smartYLim)
+    x = 1:numel(groupNames);
 
-    b = bar(x, values);
+    b = bar(ax, x, values);
     b.FaceColor = 'flat';
     for i = 1:size(colors, 1)
         b.CData(i,:) = colors(i,:);
     end
-    hold on;
+    hold(ax, 'on');
+    errorbar(ax, x, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
+    hold(ax, 'off');
 
-    xPos = 1:numel(groupNames);
-    errorbar(xPos, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
-
-    ylabel(yLabelText, 'FontSize', 12, 'FontWeight', 'bold');
-    title(titleText, 'FontSize', 14, 'FontWeight', 'bold');
-    grid on;
+    set(ax, 'XTick', x, 'XTickLabel', groupNames, 'FontSize', 10);
+    ylabel(ax, yLabelText, 'FontSize', 11, 'FontWeight', 'bold');
+    title(ax, titleText, 'FontSize', 12, 'FontWeight', 'bold');
+    grid(ax, 'on');
 
     if smartYLim
         validValues = values(~isnan(values));
@@ -362,9 +404,9 @@ function plotBarComparison(figName, yLabelText, titleText, groupNames, values, e
             vRange = vMax - vMin;
             if vRange > 0
                 margin = vRange * 0.15;
-                ylim([vMin - margin, vMax + margin]);
+                ylim(ax, [vMin - margin, vMax + margin]);
             elseif vMin ~= 0
-                ylim([vMin * 0.95, vMin * 1.05]);
+                ylim(ax, [vMin * 0.95, vMin * 1.05]);
             end
         end
     end

@@ -1,205 +1,207 @@
 % example_compare_DCMOCPSO_vs_MOCPSO_Ek.m
-% 
-% Ablation study for DCMOCPSO on UAVPathPlanning
 %
-% Compare five configurations (incremental ablation):
-% 1) OneSeg:            {1, 2, 0.5, 0.3, false, false, false} + switchMethod=0 (基准)
-% 2) OneSeg_A3:         {1, 2, 0.5, 0.3, false, false, false} + switchMethod=3 (A3基准)
-% 3) OneSeg_Lookahead:  {1, 2, 0.5, 0.3, false, false, false} + switchMethod=2 (加前瞻性算法)
-% 4) Seg_Lookahead:     {5, 2, 0.5, 0.3, false, false, false} + switchMethod=2 (加分段)
-% 5) Full_Lookahead:    {5, 2, 0.5, 0.3, true,  true,  true}  + switchMethod=2 (加full增强)
-% Metric: mean of the last HV value across n runs
+% Three-stage ablation based on OneSeg_Lookahead under multiple maxFE
+% budgets.
+%
+% Each maxFE_DCMOCPSO setting runs three groups:
+% 1) OneSeg_Lookahead : {1, 2, 0.5, 0.3, false, false, false} + switchMethod=2
+% 2) Seg_Lookahead    : {5, 2, 0.5, 0.3, false, false, false} + switchMethod=2
+% 3) Full_Lookahead   : {5, 2, 0.5, 0.3, true,  true,  true}  + switchMethod=2
+%
+% The OneSeg_Lookahead maxFE is derived separately for each budget:
+%   round(mean(validFE_Full_Lookahead) / numSegments)
 
 clear; clc; close all;
 
 %% Settings
 n = 10;
 
-% UAVPathPlanning parameters
 N = 20;
-problemParameter_Base      = {20, 20, 5, -101.5, 0, 30, 0, 500};  % switchMethod=0（基准）
-problemParameter_A3        = problemParameter_Base;               % 其余参数与Base完全一致
-problemParameter_A3{7}     = 3;                                   % switchMethod=3（A3）
-problemParameter_Lookahead = {20, 20, 5, -101.5, 0, 30, 2, 500};  % switchMethod=2（前瞻性）
+problemParameter_Lookahead = {20, 20, 5, -101.5, 0, 30, 2, 500};
 
-% DCMOCPSO settings
-maxFE_DCMOCPSO = 100;
 numSegments = 5;
-% param_DCMOCPSO: {numSegments, segmentOverlap, lambda, c_guide, useDynamicGrouping, useDynamicMutation, useEk}
-param_OneSeg      = {1, 2, 0.5, 0.3, false, false, false};
-param_Seg         = {numSegments, 2, 0.5, 0.3, false, false, false};
-param_Full        = {numSegments, 2, 0.5, 0.3, true, true, true};
+maxFE_DCMOCPSOList = [50, 100, 200];
 
-% Result cache
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results');
+param_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
+param_Seg    = {numSegments, 2, 0.5, 0.3, false, false, false};
+param_Full   = {numSegments, 2, 0.5, 0.3, true, true, true};
+groupNames = {'OneSeg_Lookahead', 'Seg_Lookahead', 'Full_Lookahead'};
+
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'compare_vs_mocpso_ek');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
 
-cacheFile_OneSeg           = fullfile(cacheDir, 'OneSeg_HV_runs.mat');
-cacheFile_OneSeg_A3        = fullfile(cacheDir, 'OneSeg_A3_HV_runs.mat');
-cacheFile_OneSeg_Lookahead = fullfile(cacheDir, 'OneSeg_Lookahead_HV_runs.mat');
-cacheFile_Seg_Lookahead    = fullfile(cacheDir, 'Seg_Lookahead_HV_runs.mat');
-cacheFile_Full_Lookahead   = fullfile(cacheDir, 'Full_Lookahead_HV_runs.mat');
+setResults = cell(1, numel(maxFE_DCMOCPSOList));
 
-%% Run ablation settings (or load cache)
+%% Run each maxFE budget
+for setIdx = 1:numel(maxFE_DCMOCPSOList)
+    maxFE_DCMOCPSO = maxFE_DCMOCPSOList(setIdx);
+    fprintf('\n\n================ maxFE_DCMOCPSO = %d ================\n', maxFE_DCMOCPSO);
 
-% 4) Full_Lookahead: Full配置+前瞻性切换算法（先运行，用于计算单段配置的maxFE）
-[hvLast_Full_Lookahead, hvSeries_Full_Lookahead, actualFE_Full_Lookahead, runtime_Full_Lookahead, meanSignal_Full_Lookahead, meanSwitchCount_Full_Lookahead, meanCoverageRatio_Full_Lookahead, objMetricSummary_Full_Lookahead, Algorithm_Full_Lookahead, Problem_Full_Lookahead] = runOrLoad( ...
-    'Full_Lookahead', cacheFile_Full_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Full), true);
+    cacheFile_Full_Lookahead = makeCacheFile(cacheDir, 'Full_Lookahead', maxFE_DCMOCPSO);
+    cacheFile_Seg_Lookahead = makeCacheFile(cacheDir, 'Seg_Lookahead', maxFE_DCMOCPSO);
+    cacheFile_OneSeg_Lookahead = makeCacheFile(cacheDir, 'OneSeg_Lookahead', maxFE_DCMOCPSO);
 
-% OneSeg的maxFE基于Full_Lookahead的实际FE按段均分（确保公平对比）
-validFE_Full_Lookahead = loadAllActualFE(cacheFile_Full_Lookahead);
-if isempty(validFE_Full_Lookahead)
-    validFE_Full_Lookahead = actualFE_Full_Lookahead(~isnan(actualFE_Full_Lookahead));
-end
-if isempty(validFE_Full_Lookahead)
-    maxFE_OneSeg = maxFE_DCMOCPSO;
-else
-    maxFE_OneSeg = max(1, round(mean(validFE_Full_Lookahead) / numSegments));
-end
+    % Run Full first to estimate the fair OneSeg maxFE from actualFE.
+    [hvLast_Full, hvSeries_Full, actualFE_Full, runtime_Full, meanSignal_Full, meanSwitchCount_Full, meanCoverageRatio_Full, objMetricSummary_Full] = runOrLoad( ...
+        sprintf('FE%d/Full_Lookahead', maxFE_DCMOCPSO), cacheFile_Full_Lookahead, n, ...
+        @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Full), ...
+        true);
 
-% 3) Seg_Lookahead: 添加分段算法（Base配置）+前瞻性切换算法
-[hvLast_Seg_Lookahead, hvSeries_Seg_Lookahead, actualFE_Seg_Lookahead, runtime_Seg_Lookahead, meanSignal_Seg_Lookahead, meanSwitchCount_Seg_Lookahead, meanCoverageRatio_Seg_Lookahead, objMetricSummary_Seg_Lookahead, Algorithm_Seg_Lookahead, Problem_Seg_Lookahead] = runOrLoad( ...
-    'Seg_Lookahead', cacheFile_Seg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Seg), true);
-
-% 1) OneSeg: 基准（单段+无增强+switchMethod=0）
-[hvLast_OneSeg, hvSeries_OneSeg, actualFE_OneSeg, runtime_OneSeg, meanSignal_OneSeg, meanSwitchCount_OneSeg, meanCoverageRatio_OneSeg, objMetricSummary_OneSeg, Algorithm_OneSeg, Problem_OneSeg] = runOrLoad( ...
-    'OneSeg', cacheFile_OneSeg, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Base, param_OneSeg), true);
-
-% 2) OneSeg_A3: OneSeg基础上使用A3切换算法，其余参数与基准一致
-[hvLast_OneSeg_A3, hvSeries_OneSeg_A3, actualFE_OneSeg_A3, runtime_OneSeg_A3, meanSignal_OneSeg_A3, meanSwitchCount_OneSeg_A3, meanCoverageRatio_OneSeg_A3, objMetricSummary_OneSeg_A3, Algorithm_OneSeg_A3, Problem_OneSeg_A3] = runOrLoad( ...
-    'OneSeg_A3', cacheFile_OneSeg_A3, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_A3, param_OneSeg), true);
-
-% 3) OneSeg_Lookahead: OneSeg基础上使用前瞻性切换算法
-[hvLast_OneSeg_Lookahead, hvSeries_OneSeg_Lookahead, actualFE_OneSeg_Lookahead, runtime_OneSeg_Lookahead, meanSignal_OneSeg_Lookahead, meanSwitchCount_OneSeg_Lookahead, meanCoverageRatio_OneSeg_Lookahead, objMetricSummary_OneSeg_Lookahead, Algorithm_OneSeg_Lookahead, Problem_OneSeg_Lookahead] = runOrLoad( ...
-    'OneSeg_Lookahead', cacheFile_OneSeg_Lookahead, n, @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Lookahead, param_OneSeg), true);
-
-%% Score（忽略NaN）
-validIdx_OneSeg           = ~isnan(hvLast_OneSeg);
-validIdx_OneSeg_A3        = ~isnan(hvLast_OneSeg_A3);
-validIdx_OneSeg_Lookahead = ~isnan(hvLast_OneSeg_Lookahead);
-validIdx_Seg_Lookahead    = ~isnan(hvLast_Seg_Lookahead);
-validIdx_Full_Lookahead   = ~isnan(hvLast_Full_Lookahead);
-
-meanHV_OneSeg           = mean(hvLast_OneSeg(validIdx_OneSeg));
-meanHV_OneSeg_A3        = mean(hvLast_OneSeg_A3(validIdx_OneSeg_A3));
-meanHV_OneSeg_Lookahead = mean(hvLast_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
-meanHV_Seg_Lookahead    = mean(hvLast_Seg_Lookahead(validIdx_Seg_Lookahead));
-meanHV_Full_Lookahead   = mean(hvLast_Full_Lookahead(validIdx_Full_Lookahead));
-
-meanRuntime_OneSeg           = mean(runtime_OneSeg(validIdx_OneSeg));
-meanRuntime_OneSeg_A3        = mean(runtime_OneSeg_A3(validIdx_OneSeg_A3));
-meanRuntime_OneSeg_Lookahead = mean(runtime_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
-meanRuntime_Seg_Lookahead    = mean(runtime_Seg_Lookahead(validIdx_Seg_Lookahead));
-meanRuntime_Full_Lookahead   = mean(runtime_Full_Lookahead(validIdx_Full_Lookahead));
-
-meanActualFE_OneSeg           = mean(actualFE_OneSeg(validIdx_OneSeg));
-meanActualFE_OneSeg_A3        = mean(actualFE_OneSeg_A3(validIdx_OneSeg_A3));
-meanActualFE_OneSeg_Lookahead = mean(actualFE_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
-meanActualFE_Seg_Lookahead    = mean(actualFE_Seg_Lookahead(validIdx_Seg_Lookahead));
-meanActualFE_Full_Lookahead   = mean(actualFE_Full_Lookahead(validIdx_Full_Lookahead));
-
-meanSignal_OneSeg_summary           = meanValid(meanSignal_OneSeg(validIdx_OneSeg));
-meanSignal_OneSeg_A3_summary        = meanValid(meanSignal_OneSeg_A3(validIdx_OneSeg_A3));
-meanSignal_OneSeg_Lookahead_summary = meanValid(meanSignal_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
-meanSignal_Seg_Lookahead_summary    = meanValid(meanSignal_Seg_Lookahead(validIdx_Seg_Lookahead));
-meanSignal_Full_Lookahead_summary   = meanValid(meanSignal_Full_Lookahead(validIdx_Full_Lookahead));
-
-meanSwitchCount_OneSeg_summary           = meanValid(meanSwitchCount_OneSeg(validIdx_OneSeg));
-meanSwitchCount_OneSeg_A3_summary        = meanValid(meanSwitchCount_OneSeg_A3(validIdx_OneSeg_A3));
-meanSwitchCount_OneSeg_Lookahead_summary = meanValid(meanSwitchCount_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
-meanSwitchCount_Seg_Lookahead_summary    = meanValid(meanSwitchCount_Seg_Lookahead(validIdx_Seg_Lookahead));
-meanSwitchCount_Full_Lookahead_summary   = meanValid(meanSwitchCount_Full_Lookahead(validIdx_Full_Lookahead));
-
-meanCoverageRatio_OneSeg_summary           = meanValid(meanCoverageRatio_OneSeg(validIdx_OneSeg));
-meanCoverageRatio_OneSeg_A3_summary        = meanValid(meanCoverageRatio_OneSeg_A3(validIdx_OneSeg_A3));
-meanCoverageRatio_OneSeg_Lookahead_summary = meanValid(meanCoverageRatio_OneSeg_Lookahead(validIdx_OneSeg_Lookahead));
-meanCoverageRatio_Seg_Lookahead_summary    = meanValid(meanCoverageRatio_Seg_Lookahead(validIdx_Seg_Lookahead));
-meanCoverageRatio_Full_Lookahead_summary   = meanValid(meanCoverageRatio_Full_Lookahead(validIdx_Full_Lookahead));
-
-fprintf('\n=== Summary (n=%d) ===\n', n);
-fprintf('OneSeg           : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-    meanHV_OneSeg, sum(validIdx_OneSeg), n, maxFE_OneSeg, meanActualFE_OneSeg, meanRuntime_OneSeg, meanSignal_OneSeg_summary, meanSwitchCount_OneSeg_summary, meanCoverageRatio_OneSeg_summary);
-fprintf('OneSeg_A3        : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-    meanHV_OneSeg_A3, sum(validIdx_OneSeg_A3), n, maxFE_OneSeg, meanActualFE_OneSeg_A3, meanRuntime_OneSeg_A3, meanSignal_OneSeg_A3_summary, meanSwitchCount_OneSeg_A3_summary, meanCoverageRatio_OneSeg_A3_summary);
-fprintf('OneSeg_Lookahead : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-    meanHV_OneSeg_Lookahead, sum(validIdx_OneSeg_Lookahead), n, maxFE_OneSeg, meanActualFE_OneSeg_Lookahead, meanRuntime_OneSeg_Lookahead, meanSignal_OneSeg_Lookahead_summary, meanSwitchCount_OneSeg_Lookahead_summary, meanCoverageRatio_OneSeg_Lookahead_summary);
-fprintf('Seg_Lookahead    : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-    meanHV_Seg_Lookahead, sum(validIdx_Seg_Lookahead), n, maxFE_DCMOCPSO, meanActualFE_Seg_Lookahead, meanRuntime_Seg_Lookahead, meanSignal_Seg_Lookahead_summary, meanSwitchCount_Seg_Lookahead_summary, meanCoverageRatio_Seg_Lookahead_summary);
-fprintf('Full_Lookahead   : mean(last HV) = %.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-    meanHV_Full_Lookahead, sum(validIdx_Full_Lookahead), n, maxFE_DCMOCPSO, meanActualFE_Full_Lookahead, meanRuntime_Full_Lookahead, meanSignal_Full_Lookahead_summary, meanSwitchCount_Full_Lookahead_summary, meanCoverageRatio_Full_Lookahead_summary);
-
-results = struct();
-results.experimentName = 'DCMOCPSO_vs_MOCPSO_Ek';
-results.groupNames = {'OneSeg', 'OneSeg_A3', 'OneSeg_Lookahead', 'Seg_Lookahead', 'Full_Lookahead'};
-results.meanHV = [meanHV_OneSeg, meanHV_OneSeg_A3, meanHV_OneSeg_Lookahead, meanHV_Seg_Lookahead, meanHV_Full_Lookahead];
-results.meanRuntime = [meanRuntime_OneSeg, meanRuntime_OneSeg_A3, meanRuntime_OneSeg_Lookahead, meanRuntime_Seg_Lookahead, meanRuntime_Full_Lookahead];
-results.meanActualFE = [meanActualFE_OneSeg, meanActualFE_OneSeg_A3, meanActualFE_OneSeg_Lookahead, meanActualFE_Seg_Lookahead, meanActualFE_Full_Lookahead];
-results.meanSignal = [meanSignal_OneSeg_summary, meanSignal_OneSeg_A3_summary, meanSignal_OneSeg_Lookahead_summary, meanSignal_Seg_Lookahead_summary, meanSignal_Full_Lookahead_summary];
-results.meanSwitchCount = [meanSwitchCount_OneSeg_summary, meanSwitchCount_OneSeg_A3_summary, meanSwitchCount_OneSeg_Lookahead_summary, meanSwitchCount_Seg_Lookahead_summary, meanSwitchCount_Full_Lookahead_summary];
-results.meanCoverageRatio = [meanCoverageRatio_OneSeg_summary, meanCoverageRatio_OneSeg_A3_summary, meanCoverageRatio_OneSeg_Lookahead_summary, meanCoverageRatio_Seg_Lookahead_summary, meanCoverageRatio_Full_Lookahead_summary];
-results.objMetricSummaryAll = {objMetricSummary_OneSeg, objMetricSummary_OneSeg_A3, objMetricSummary_OneSeg_Lookahead, objMetricSummary_Seg_Lookahead, objMetricSummary_Full_Lookahead};
-summaryFile = fullfile(cacheDir, 'DCMOCPSO_vs_MOCPSO_Ek_summary.mat');
-save(summaryFile, 'results');
-fprintf('\nSummary saved to: %s\n', summaryFile);
-
-%% Plot bar chart with smart y-axis
-figure('Name', 'HV comparison', 'Position', [200, 200, 700, 500]);
-
-colorOneSeg           = [0.8, 0.2, 0.2];  % Red
-colorOneSeg_A3        = [0.5, 0.3, 0.7];  % Purple
-colorOneSeg_Lookahead = [0.9, 0.6, 0.1];  % Orange
-colorSeg_Lookahead    = [0.2, 0.7, 0.3];  % Green
-colorFull_Lookahead   = [0.2, 0.4, 0.8];  % Blue
-
-x = categorical({'OneSeg','OneSeg\_A3','OneSeg\_Lookahead','Seg\_Lookahead','Full\_Lookahead'});
-x = reordercats(x, {'OneSeg','OneSeg\_A3','OneSeg\_Lookahead','Seg\_Lookahead','Full\_Lookahead'});
-
-b = bar(x, [meanHV_OneSeg, meanHV_OneSeg_A3, meanHV_OneSeg_Lookahead, meanHV_Seg_Lookahead, meanHV_Full_Lookahead]);
-b.FaceColor = 'flat';
-b.CData(1,:) = colorOneSeg;
-b.CData(2,:) = colorOneSeg_A3;
-b.CData(3,:) = colorOneSeg_Lookahead;
-b.CData(4,:) = colorSeg_Lookahead;
-b.CData(5,:) = colorFull_Lookahead;
-
-ylabel('Mean of last HV', 'FontSize', 12, 'FontWeight', 'bold');
-title('Ablation Study: HV Metric', 'FontSize', 14, 'FontWeight', 'bold');
-grid on;
-
-allHV = [meanHV_OneSeg, meanHV_OneSeg_A3, meanHV_OneSeg_Lookahead, meanHV_Seg_Lookahead, meanHV_Full_Lookahead];
-allHV = allHV(~isnan(allHV));
-if numel(allHV) > 0
-    hvMin = min(allHV); hvMax = max(allHV); hvRange = hvMax - hvMin;
-    if hvRange > 0
-        margin = hvRange * 0.15;
-        ylim([hvMin - margin, hvMax + margin]);
-    else
-        ylim([hvMin * 0.95, hvMin * 1.05]);
+    validFE_Full = loadAllActualFE(cacheFile_Full_Lookahead);
+    if isempty(validFE_Full)
+        validFE_Full = actualFE_Full(~isnan(actualFE_Full));
     end
+    if isempty(validFE_Full)
+        maxFE_OneSeg = maxFE_DCMOCPSO;
+    else
+        maxFE_OneSeg = max(1, round(mean(validFE_Full) / numSegments));
+    end
+
+    [hvLast_Seg, hvSeries_Seg, actualFE_Seg, runtime_Seg, meanSignal_Seg, meanSwitchCount_Seg, meanCoverageRatio_Seg, objMetricSummary_Seg] = runOrLoad( ...
+        sprintf('FE%d/Seg_Lookahead', maxFE_DCMOCPSO), cacheFile_Seg_Lookahead, n, ...
+        @() runOne_DCMOCPSO(N, maxFE_DCMOCPSO, problemParameter_Lookahead, param_Seg), ...
+        true);
+
+    [hvLast_OneSeg, hvSeries_OneSeg, actualFE_OneSeg, runtime_OneSeg, meanSignal_OneSeg, meanSwitchCount_OneSeg, meanCoverageRatio_OneSeg, objMetricSummary_OneSeg] = runOrLoad( ...
+        sprintf('FE%d/OneSeg_Lookahead', maxFE_DCMOCPSO), cacheFile_OneSeg_Lookahead, n, ...
+        @() runOne_DCMOCPSO(N, maxFE_OneSeg, problemParameter_Lookahead, param_OneSeg), ...
+        true);
+
+    hvLastAll = {hvLast_OneSeg, hvLast_Seg, hvLast_Full};
+    hvSeriesAll = {hvSeries_OneSeg, hvSeries_Seg, hvSeries_Full};
+    actualFEAll = {actualFE_OneSeg, actualFE_Seg, actualFE_Full};
+    runtimeAll = {runtime_OneSeg, runtime_Seg, runtime_Full};
+    meanSignalAll = {meanSignal_OneSeg, meanSignal_Seg, meanSignal_Full};
+    meanSwitchCountAll = {meanSwitchCount_OneSeg, meanSwitchCount_Seg, meanSwitchCount_Full};
+    meanCoverageRatioAll = {meanCoverageRatio_OneSeg, meanCoverageRatio_Seg, meanCoverageRatio_Full};
+    objMetricSummaryAll = {objMetricSummary_OneSeg, objMetricSummary_Seg, objMetricSummary_Full};
+    algorithmParams = {param_OneSeg, param_Seg, param_Full};
+    maxFEAll = [maxFE_OneSeg, maxFE_DCMOCPSO, maxFE_DCMOCPSO];
+
+    setResults{setIdx} = summarizeSet( ...
+        sprintf('FE%d', maxFE_DCMOCPSO), maxFE_DCMOCPSO, maxFE_OneSeg, ...
+        groupNames, problemParameter_Lookahead, algorithmParams, maxFEAll, ...
+        hvLastAll, hvSeriesAll, actualFEAll, runtimeAll, meanSignalAll, ...
+        meanSwitchCountAll, meanCoverageRatioAll, objMetricSummaryAll, n, numSegments);
+
+    plotSetResults(setResults{setIdx});
 end
 
-%% Plot runtime comparison
-figure('Name', 'Runtime comparison', 'Position', [950, 200, 700, 500]);
+%% Save combined summary
+results = struct();
+results.experimentName = 'DCMOCPSO_three_stage_lookahead_ablation_FE_sweep';
+results.maxFE_DCMOCPSOList = maxFE_DCMOCPSOList;
+results.groupNames = groupNames;
+results.problemParameter_Lookahead = problemParameter_Lookahead;
+results.param_OneSeg = param_OneSeg;
+results.param_Seg = param_Seg;
+results.param_Full = param_Full;
+results.numSegments = numSegments;
+results.n = n;
+results.setResults = setResults;
 
-xRuntime = categorical({'OneSeg','OneSeg\_A3','OneSeg\_Lookahead','Seg\_Lookahead','Full\_Lookahead'});
-xRuntime = reordercats(xRuntime, {'OneSeg','OneSeg\_A3','OneSeg\_Lookahead','Seg\_Lookahead','Full\_Lookahead'});
-
-br = bar(xRuntime, [meanRuntime_OneSeg, meanRuntime_OneSeg_A3, meanRuntime_OneSeg_Lookahead, meanRuntime_Seg_Lookahead, meanRuntime_Full_Lookahead]);
-br.FaceColor = 'flat';
-br.CData(1,:) = colorOneSeg;
-br.CData(2,:) = colorOneSeg_A3;
-br.CData(3,:) = colorOneSeg_Lookahead;
-br.CData(4,:) = colorSeg_Lookahead;
-br.CData(5,:) = colorFull_Lookahead;
-
-ylabel('Mean runtime (seconds)', 'FontSize', 12, 'FontWeight', 'bold');
-title('Ablation Study: Runtime', 'FontSize', 14, 'FontWeight', 'bold');
-grid on;
+summaryFile = fullfile(cacheDir, 'DCMOCPSO_vs_MOCPSO_Ek_FE_sweep_summary.mat');
+save(summaryFile, 'results');
+fprintf('\nCombined summary saved to: %s\n', summaryFile);
 
 
 %% ===================== local functions =====================
+function cacheFile = makeCacheFile(cacheDir, groupName, maxFE_DCMOCPSO)
+    if maxFE_DCMOCPSO == 100
+        cacheFile = fullfile(cacheDir, sprintf('%s_HV_runs.mat', groupName));
+    else
+        cacheFile = fullfile(cacheDir, sprintf('FE%d_%s_HV_runs.mat', maxFE_DCMOCPSO, groupName));
+    end
+end
+
+function result = summarizeSet(setName, maxFE_DCMOCPSO, maxFE_OneSeg, groupNames, problemParameter_Lookahead, algorithmParams, maxFEAll, hvLastAll, hvSeriesAll, actualFEAll, runtimeAll, meanSignalAll, meanSwitchCountAll, meanCoverageRatioAll, objMetricSummaryAll, n, numSegments)
+    numGroups = numel(groupNames);
+    meanHV = nan(1, numGroups);
+    stdHV = nan(1, numGroups);
+    meanRuntime = nan(1, numGroups);
+    stdRuntime = nan(1, numGroups);
+    meanActualFE = nan(1, numGroups);
+    meanSignal = nan(1, numGroups);
+    stdSignal = nan(1, numGroups);
+    meanSwitchCount = nan(1, numGroups);
+    stdSwitchCount = nan(1, numGroups);
+    meanCoverageRatio = nan(1, numGroups);
+    stdCoverageRatio = nan(1, numGroups);
+    validCount = zeros(1, numGroups);
+
+    fprintf('\n--- Three-stage lookahead ablation summary (%s, n=%d) ---\n', setName, n);
+    fprintf('Derived maxFE_OneSeg = %d from Full_Lookahead actualFE / %d.\n', maxFE_OneSeg, numSegments);
+    for i = 1:numGroups
+        validIdx = ~isnan(hvLastAll{i});
+        validCount(i) = sum(validIdx);
+        meanHV(i) = meanValid(hvLastAll{i}(validIdx));
+        stdHV(i) = stdValid(hvLastAll{i}(validIdx));
+        meanRuntime(i) = meanValid(runtimeAll{i}(validIdx));
+        stdRuntime(i) = stdValid(runtimeAll{i}(validIdx));
+        meanActualFE(i) = meanValid(actualFEAll{i}(validIdx));
+        meanSignal(i) = meanValid(meanSignalAll{i}(validIdx));
+        stdSignal(i) = stdValid(meanSignalAll{i}(validIdx));
+        meanSwitchCount(i) = meanValid(meanSwitchCountAll{i}(validIdx));
+        stdSwitchCount(i) = stdValid(meanSwitchCountAll{i}(validIdx));
+        meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
+        stdCoverageRatio(i) = stdValid(meanCoverageRatioAll{i}(validIdx));
+
+        fprintf('%-18s : mean(last HV)=%.6e, std=%.6e (valid=%d/%d, maxFE=%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+            groupNames{i}, meanHV(i), stdHV(i), validCount(i), n, maxFEAll(i), meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
+    end
+
+    result = struct();
+    result.setName = setName;
+    result.maxFE_DCMOCPSO = maxFE_DCMOCPSO;
+    result.maxFE_OneSeg = maxFE_OneSeg;
+    result.groupNames = groupNames;
+    result.problemParameter_Lookahead = problemParameter_Lookahead;
+    result.algorithmParams = algorithmParams;
+    result.maxFEAll = maxFEAll;
+    result.hvLastAll = hvLastAll;
+    result.hvSeriesAll = hvSeriesAll;
+    result.actualFEAll = actualFEAll;
+    result.runtimeAll = runtimeAll;
+    result.meanSignalAll = meanSignalAll;
+    result.meanSwitchCountAll = meanSwitchCountAll;
+    result.meanCoverageRatioAll = meanCoverageRatioAll;
+    result.objMetricSummaryAll = objMetricSummaryAll;
+    result.meanHV = meanHV;
+    result.stdHV = stdHV;
+    result.meanRuntime = meanRuntime;
+    result.stdRuntime = stdRuntime;
+    result.meanActualFE = meanActualFE;
+    result.meanSignal = meanSignal;
+    result.stdSignal = stdSignal;
+    result.meanSwitchCount = meanSwitchCount;
+    result.stdSwitchCount = stdSwitchCount;
+    result.meanCoverageRatio = meanCoverageRatio;
+    result.stdCoverageRatio = stdCoverageRatio;
+    result.validCount = validCount;
+end
+
+function plotSetResults(result)
+    colors = [
+        0.90, 0.60, 0.10
+        0.20, 0.70, 0.30
+        0.20, 0.40, 0.80
+    ];
+    titlePrefix = sprintf('Three-stage lookahead ablation %s', result.setName);
+
+    figure('Name', sprintf('%s metrics', result.setName), ...
+        'Color', 'w', 'Position', [200, 200, 1200, 520]);
+    layout = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(layout, titlePrefix, 'FontSize', 14, 'FontWeight', 'bold');
+
+    plotBarComparison(nexttile(layout), 'Mean of last HV', ...
+        'HV', result.groupNames, result.meanHV, result.stdHV, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
+        'Runtime', result.groupNames, result.meanRuntime, result.stdRuntime, colors, false);
+end
+
 function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
     hvLast = nan(1,n);
     hvSeries = cell(1,n);
@@ -211,6 +213,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
     objMetricSummary = cell(1,n);
     lastAlgorithm = [];
     lastProblem = [];
+    loadCount = 0;
 
     if exist(cacheFile, 'file') == 2
         S = load(cacheFile);
@@ -242,7 +245,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
                     objMetricSummary{i} = runs(i).objMetricSummary;
                 end
             end
-            if loadCount >= n && all(~isnan(hvLast)) && all(~isnan(meanSignal)) && all(~isnan(meanSwitchCount)) && all(~isnan(meanCoverageRatio))
+            if loadCount >= n
                 return;
             end
         end
@@ -253,10 +256,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
         return;
     end
 
-    startRun = find(isnan(hvLast) | isnan(meanSignal) | isnan(meanSwitchCount) | isnan(meanCoverageRatio), 1);
-    if isempty(startRun)
-        return;
-    end
+    startRun = loadCount + 1;
 
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
     runs = struct('hv', {}, 'actualFE', {}, 'runtime', {}, 'meanSignal', {}, 'meanSwitchCount', {}, 'meanCoverageRatio', {}, 'objMetricSummary', {});
@@ -286,7 +286,6 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
             save(cacheFile, 'runs');
         catch ME
             fprintf('  Run %d/%d FAILED: %s\n', i, n, ME.message);
-            % 保留 NaN 值，继续运行下一次
         end
     end
 end
@@ -310,9 +309,9 @@ function actualFE = loadAllActualFE(cacheFile)
     end
 end
 
-function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, param_DCMOCPSO)
-    Algorithm = DCMOCPSO('parameter', param_DCMOCPSO, 'outputFcn', @(~,~)[]);
-    Problem   = UAVPathPlanning('N', N, 'maxFE', maxFE, 'parameter', problemParameter);
+function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, algorithmParameter)
+    Algorithm = DCMOCPSO('parameter', algorithmParameter, 'outputFcn', @(~,~)[]);
+    Problem = UAVPathPlanning('N', N, 'maxFE', maxFE, 'parameter', problemParameter);
     tStart = tic;
     Algorithm.Solve(Problem);
     runtime = toc(tStart);
@@ -360,5 +359,48 @@ function value = meanValid(values)
         value = NaN;
     else
         value = mean(values);
+    end
+end
+
+function value = stdValid(values)
+    values = values(~isnan(values) & isfinite(values));
+    if isempty(values)
+        value = NaN;
+    else
+        value = std(values);
+    end
+end
+
+function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors, colors, smartYLim)
+    x = 1:numel(groupNames);
+    b = bar(ax, x, values);
+    b.FaceColor = 'flat';
+    for i = 1:size(colors, 1)
+        b.CData(i,:) = colors(i,:);
+    end
+    hold(ax, 'on');
+
+    errorbar(ax, x, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
+
+    set(ax, 'XTick', x, 'XTickLabel', groupNames, 'FontSize', 10);
+    ylabel(ax, yLabelText, 'FontSize', 11, 'FontWeight', 'bold');
+    title(ax, titleText, 'FontSize', 12, 'FontWeight', 'bold');
+    grid(ax, 'on');
+
+    if smartYLim
+        validValues = values(~isnan(values));
+        if ~isempty(validValues)
+            validErrors = errors(~isnan(values));
+            validErrors(isnan(validErrors)) = 0;
+            vMin = min(validValues - validErrors);
+            vMax = max(validValues + validErrors);
+            vRange = vMax - vMin;
+            if vRange > 0
+                margin = vRange * 0.15;
+                ylim(ax, [vMin - margin, vMax + margin]);
+            elseif vMin ~= 0
+                ylim(ax, [vMin * 0.95, vMin * 1.05]);
+            end
+        end
     end
 end

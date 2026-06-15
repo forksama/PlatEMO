@@ -1,60 +1,58 @@
-% example_ablation_DCMOCPSO_lookaheadDistance.m
+% example_ablation_DCMOCPSO_numSegments_FullParam.m
 %
-% One-factor ablation/sensitivity study for the lookahead distance used by
-% the switchMethod=2 proactive handover algorithm in UAVPathPlanning.
+% Paired ablation for DCMOCPSO segment count under Full_Lookahead.
 %
-% Algorithm settings are fixed to OneSeg_Lookahead:
-%   {1, 2, 0.5, 0.3, false, false, false} + switchMethod=2
+% The segmented groups reuse existing caches for numSegments = 3, 5, 7, 9:
+%   {numSegments, 2, 0.5, 0.3, true, true, true} + switchMethod=2
 %
-% The eighth UAVPathPlanning parameter is lookaheadDistance, measured in
-% meters. Each distance setting is cached independently. After every
-% successful independent run, the corresponding cache file is saved
-% immediately.
+% For each segmented group, this script creates a corresponding OneSeg
+% comparison group:
+%   {1, 2, 0.5, 0.3, true, true, true} + switchMethod=2
+%
+% The OneSeg comparison maxFE is derived from the segmented group's actual
+% FE: round(mean(actualFE_segmented) / numSegments). The old seg_1 group is
+% not used because its maxFE=100 budget is not comparable.
 
 clear; clc; close all;
 
 %% Settings
 n = 20;
 
-% Start and warm up the parallel pool before per-run timing begins, so the
-% parpool startup cost is not counted in any algorithm runtime.
 enableParallelPool = true;
 parallelPoolProfile = 'Processes';
 parallelPoolNumWorkers = [];
 prepareParallelPool(enableParallelPool, parallelPoolProfile, parallelPoolNumWorkers);
 
-% UAVPathPlanning base parameters:
-% {bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx,
-%  switchMethod, lookaheadDistance}
 N = 20;
-baseProblemParameter = {20, 20, 5, -101.5, 0, 30, 2, 500};
+baseProblemParameter = {20, 20, 5, -101.5, 0, 30, 2, 500, 10, 4};
 
-% Lookahead distances to compare. 0 means the proactive score only sees the
-% current preset waypoint; 500 is the current default used by prior scripts.
-lookaheadDistanceList = [0, 100, 300, 500, 700, 900, 1100, 1300, 1500, 1700, 1900, 2100, 2300];
+segmentedNumSegmentsList = [3, 5, 7, 9];
 
-% OneSeg_Lookahead settings:
-% {numSegments, segmentOverlap, lambda, c_guide,
-%  useDynamicGrouping, useDynamicMutation, useEk}
-maxFE_OneSeg = 418;
-param_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
+maxFE_Segmented = 100;
+baseParam_Full = {5, 2, 0.5, 0.3, true, true, true};
 
-% Result cache. Use experiment-specific files to avoid mixing with older
-% DCMOCPSO ablation caches.
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'lookahead_distance_oneseg');
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'num_segments_full_param');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
 
 commonConfig = struct( ...
     'N', N, ...
-    'maxFE', maxFE_OneSeg, ...
+    'maxFE_Segmented', maxFE_Segmented, ...
     'baseProblemParameter', {baseProblemParameter}, ...
-    'param_OneSeg', {param_OneSeg});
+    'baseParam_Full', {baseParam_Full});
 
-%% Run or load lookahead-distance groups
-numGroups = numel(lookaheadDistanceList);
-groupNames = arrayfun(@(v) sprintf('lookahead_%sm', valueTag(v)), lookaheadDistanceList, 'UniformOutput', false);
+%% Run or load paired groups
+numPairs = numel(segmentedNumSegmentsList);
+numGroups = numPairs * 2;
+
+groupNames = cell(1, numGroups);
+sourceSegmentList = nan(1, numGroups);
+numSegmentsPerGroup = nan(1, numGroups);
+segmentRoleList = cell(1, numGroups);
+maxFEAll = nan(1, numGroups);
+algorithmParams = cell(1, numGroups);
+
 hvLastAll = cell(1, numGroups);
 hvSeriesAll = cell(1, numGroups);
 actualFEAll = cell(1, numGroups);
@@ -64,19 +62,56 @@ meanSwitchCountAll = cell(1, numGroups);
 meanCoverageRatioAll = cell(1, numGroups);
 objMetricSummaryAll = cell(1, numGroups);
 
-fprintf('\n=== OneSeg_Lookahead distance ablation (n=%d) ===\n', n);
-fprintf('Common settings: N=%d, maxFE=%d, param_OneSeg={1,2,0.5,0.3,false,false,false}\n', ...
-    commonConfig.N, commonConfig.maxFE);
+fprintf('\n=== Full_Lookahead paired numSegments ablation (n=%d) ===\n', n);
+fprintf('Segmented groups reuse maxFE=%d caches; each OneSeg comparison uses mean(actualFE_segmented)/numSegments.\n', ...
+    commonConfig.maxFE_Segmented);
 
-for i = 1:numGroups
-    lookaheadDistance = lookaheadDistanceList(i);
-    problemParameter = makeProblemParameter(baseProblemParameter, lookaheadDistance);
-    cacheFile = fullfile(cacheDir, sprintf('LookaheadDistance_OneSeg_%s_HV_objMetrics_runs.mat', groupNames{i}));
+for pairIdx = 1:numPairs
+    numSegments = segmentedNumSegmentsList(pairIdx);
+    segmentedGroupIdx = (pairIdx - 1) * 2 + 1;
+    oneSegGroupIdx = segmentedGroupIdx + 1;
 
-    [hvLastAll{i}, hvSeriesAll{i}, actualFEAll{i}, runtimeAll{i}, meanSignalAll{i}, meanSwitchCountAll{i}, meanCoverageRatioAll{i}, objMetricSummaryAll{i}] = runOrLoad( ...
-        groupNames{i}, cacheFile, n, ...
-        @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE, problemParameter, commonConfig.param_OneSeg), ...
+    groupNames{segmentedGroupIdx} = sprintf('Seg%d_Full', numSegments);
+    groupNames{oneSegGroupIdx} = sprintf('OneSeg_for_Seg%d', numSegments);
+    sourceSegmentList([segmentedGroupIdx, oneSegGroupIdx]) = numSegments;
+    numSegmentsPerGroup(segmentedGroupIdx) = numSegments;
+    numSegmentsPerGroup(oneSegGroupIdx) = 1;
+    segmentRoleList{segmentedGroupIdx} = 'Segmented';
+    segmentRoleList{oneSegGroupIdx} = 'OneSegBaseline';
+
+    algorithmParams{segmentedGroupIdx} = makeAlgorithmParameter(baseParam_Full, numSegments);
+    cacheFile_Segmented = fullfile(cacheDir, sprintf('NumSegments_Full_seg_%s_HV_objMetrics_runs.mat', valueTag(numSegments)));
+
+    [hvLastAll{segmentedGroupIdx}, hvSeriesAll{segmentedGroupIdx}, actualFEAll{segmentedGroupIdx}, runtimeAll{segmentedGroupIdx}, meanSignalAll{segmentedGroupIdx}, meanSwitchCountAll{segmentedGroupIdx}, meanCoverageRatioAll{segmentedGroupIdx}, objMetricSummaryAll{segmentedGroupIdx}] = runOrLoad( ...
+        groupNames{segmentedGroupIdx}, cacheFile_Segmented, n, ...
+        @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE_Segmented, commonConfig.baseProblemParameter, algorithmParams{segmentedGroupIdx}), ...
         true);
+    maxFEAll(segmentedGroupIdx) = commonConfig.maxFE_Segmented;
+
+    validFE_Segmented = loadAllActualFE(cacheFile_Segmented);
+    if isempty(validFE_Segmented)
+        validFE_Segmented = actualFEAll{segmentedGroupIdx}(~isnan(actualFEAll{segmentedGroupIdx}));
+    end
+    if isempty(validFE_Segmented)
+        maxFE_OneSeg = commonConfig.maxFE_Segmented;
+        warning('[%s] no valid segmented actualFE found; fallback OneSeg maxFE=%d.', ...
+            groupNames{segmentedGroupIdx}, maxFE_OneSeg);
+    else
+        maxFE_OneSeg = max(1, round(meanValid(validFE_Segmented) / numSegments));
+    end
+
+    algorithmParams{oneSegGroupIdx} = makeAlgorithmParameter(baseParam_Full, 1);
+    maxFEAll(oneSegGroupIdx) = maxFE_OneSeg;
+    cacheFile_OneSeg = fullfile(cacheDir, sprintf('NumSegments_Full_oneSeg_for_seg_%s_FE_%s_HV_objMetrics_runs.mat', ...
+        valueTag(numSegments), valueTag(maxFE_OneSeg)));
+
+    [hvLastAll{oneSegGroupIdx}, hvSeriesAll{oneSegGroupIdx}, actualFEAll{oneSegGroupIdx}, runtimeAll{oneSegGroupIdx}, meanSignalAll{oneSegGroupIdx}, meanSwitchCountAll{oneSegGroupIdx}, meanCoverageRatioAll{oneSegGroupIdx}, objMetricSummaryAll{oneSegGroupIdx}] = runOrLoad( ...
+        groupNames{oneSegGroupIdx}, cacheFile_OneSeg, n, ...
+        @() runOne_DCMOCPSO(commonConfig.N, maxFE_OneSeg, commonConfig.baseProblemParameter, algorithmParams{oneSegGroupIdx}), ...
+        true);
+
+    fprintf('[Pair Seg%d] segmented maxFE=%d, derived OneSeg maxFE=%d from actualFE mean / %d.\n', ...
+        numSegments, commonConfig.maxFE_Segmented, maxFE_OneSeg, numSegments);
 end
 
 %% Summary
@@ -93,15 +128,15 @@ meanCoverageRatio = nan(1, numGroups);
 stdCoverageRatio = nan(1, numGroups);
 validCount = zeros(1, numGroups);
 
-fprintf('\n--- Lookahead distance summary ---\n');
+fprintf('\n--- paired numSegments summary ---\n');
 for i = 1:numGroups
     validIdx = ~isnan(hvLastAll{i});
     validCount(i) = sum(validIdx);
-    meanHV(i) = mean(hvLastAll{i}(validIdx));
-    stdHV(i) = std(hvLastAll{i}(validIdx));
-    meanRuntime(i) = mean(runtimeAll{i}(validIdx));
-    stdRuntime(i) = std(runtimeAll{i}(validIdx));
-    meanActualFE(i) = mean(actualFEAll{i}(validIdx));
+    meanHV(i) = meanValid(hvLastAll{i}(validIdx));
+    stdHV(i) = stdValid(hvLastAll{i}(validIdx));
+    meanRuntime(i) = meanValid(runtimeAll{i}(validIdx));
+    stdRuntime(i) = stdValid(runtimeAll{i}(validIdx));
+    meanActualFE(i) = meanValid(actualFEAll{i}(validIdx));
     meanSignal(i) = meanValid(meanSignalAll{i}(validIdx));
     stdSignal(i) = stdValid(meanSignalAll{i}(validIdx));
     meanSwitchCount(i) = meanValid(meanSwitchCountAll{i}(validIdx));
@@ -109,15 +144,21 @@ for i = 1:numGroups
     meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
     stdCoverageRatio(i) = stdValid(meanCoverageRatioAll{i}(validIdx));
 
-    fprintf('%-18s : lookaheadDistance=%g m, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, std=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-        groupNames{i}, lookaheadDistanceList(i), meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), stdRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
+    fprintf('%-18s : sourceSeg=%d, numSegments=%d, role=%s, maxFE=%d, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+        groupNames{i}, sourceSegmentList(i), numSegmentsPerGroup(i), segmentRoleList{i}, maxFEAll(i), ...
+        meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
 end
 
 results = struct();
-results.experimentName = 'LookaheadDistanceOneSegSweep';
+results.experimentName = 'NumSegmentsFullParamPairedOneSegAblation';
 results.groupNames = groupNames;
-results.lookaheadDistanceList = lookaheadDistanceList;
+results.segmentedNumSegmentsList = segmentedNumSegmentsList;
+results.sourceSegmentList = sourceSegmentList;
+results.numSegmentsPerGroup = numSegmentsPerGroup;
+results.segmentRoleList = segmentRoleList;
 results.commonConfig = commonConfig;
+results.algorithmParams = algorithmParams;
+results.maxFEAll = maxFEAll;
 results.hvLastAll = hvLastAll;
 results.hvSeriesAll = hvSeriesAll;
 results.actualFEAll = actualFEAll;
@@ -139,27 +180,49 @@ results.meanCoverageRatio = meanCoverageRatio;
 results.stdCoverageRatio = stdCoverageRatio;
 results.validCount = validCount;
 
-summaryFile = fullfile(cacheDir, 'LookaheadDistance_OneSeg_sweep_summary.mat');
+summaryFile = fullfile(cacheDir, 'NumSegments_Full_paired_oneSeg_summary.mat');
 save(summaryFile, 'results');
 fprintf('\nSummary saved to: %s\n', summaryFile);
 
 %% Plot comparisons
-colors = lines(numGroups);
-plotMetricSet('OneSeg_Lookahead distance sweep', groupNames, ...
+colors = pairedColors(numGroups);
+plotMetricSet('Full_Lookahead paired numSegments ablation', groupNames, ...
     meanHV, stdHV, meanRuntime, stdRuntime, meanSignal, stdSignal, ...
     meanSwitchCount, stdSwitchCount, meanCoverageRatio, stdCoverageRatio, ...
     colors, [200, 200], true);
 
 
 %% ===================== local functions =====================
-function problemParameter = makeProblemParameter(baseProblemParameter, lookaheadDistance)
-    problemParameter = baseProblemParameter;
-    problemParameter{7} = 2;
-    problemParameter{8} = lookaheadDistance;
+function algorithmParameter = makeAlgorithmParameter(baseParam_Full, numSegments)
+    algorithmParameter = baseParam_Full;
+    algorithmParameter{1} = numSegments;
+    algorithmParameter{2} = 2;
+    algorithmParameter{5} = true;
+    algorithmParameter{6} = true;
+    algorithmParameter{7} = true;
 end
 
 function tag = valueTag(value)
     tag = strrep(sprintf('%g', value), '.', 'p');
+end
+
+function actualFE = loadAllActualFE(cacheFile)
+    actualFE = [];
+    if exist(cacheFile, 'file') ~= 2
+        return;
+    end
+
+    S = load(cacheFile);
+    if ~isfield(S, 'runs')
+        return;
+    end
+
+    runs = S.runs;
+    for i = 1:numel(runs)
+        if isfield(runs, 'actualFE') && ~isempty(runs(i).actualFE) && ~isnan(runs(i).actualFE)
+            actualFE(end+1) = runs(i).actualFE; %#ok<AGROW>
+        end
+    end
 end
 
 function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
@@ -267,10 +330,8 @@ function prepareParallelPool(enableParallelPool, poolProfile, numWorkers)
         fprintf('[Parallel] Reusing existing parallel pool with %d worker(s).\n', pool.NumWorkers);
     end
 
-    warmup = zeros(1, pool.NumWorkers);
-    parfor i = 1:pool.NumWorkers
-        warmup(i) = i;
-    end
+    warmupFuture = parfeval(pool, @() 1, 1);
+    fetchOutputs(warmupFuture);
     fprintf('[Parallel] Pool ready with %d worker(s).\n', pool.NumWorkers);
 end
 
@@ -296,11 +357,12 @@ end
 function objMetricSummary = extractObjectiveMetrics(Algorithm)
     objMetricSummary = struct('meanSignal', NaN, 'meanSwitchCount', NaN, ...
         'meanCoverageRatio', NaN, 'finalPopulationSize', 0);
-    if isempty(Algorithm.result)
+
+    if isempty(Algorithm.result) || isempty(Algorithm.result{end})
         return;
     end
 
-    finalPopulation = Algorithm.result{end, 2};
+    finalPopulation = Algorithm.result{end};
     if isempty(finalPopulation)
         return;
     end
@@ -331,8 +393,23 @@ function value = stdValid(values)
     values = values(~isnan(values) & isfinite(values));
     if isempty(values)
         value = NaN;
+    elseif numel(values) == 1
+        value = 0;
     else
         value = std(values);
+    end
+end
+
+function colors = pairedColors(numGroups)
+    colors = zeros(numGroups, 3);
+    segmentedColor = [0.20, 0.42, 0.78];
+    baselineColor = [0.90, 0.60, 0.10];
+    for i = 1:numGroups
+        if mod(i, 2) == 1
+            colors(i,:) = segmentedColor;
+        else
+            colors(i,:) = baselineColor;
+        end
     end
 end
 
@@ -340,7 +417,7 @@ function plotMetricSet(titlePrefix, groupNames, meanHV, stdHV, meanRuntime, stdR
     x0 = basePosition(1);
     y0 = basePosition(2);
     figure('Name', sprintf('%s metrics', titlePrefix), ...
-        'Color', 'w', 'Position', [x0, y0, 1500, 900]);
+        'Color', 'w', 'Position', [x0, y0, 1600, 900]);
     layout = tiledlayout(2, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(layout, titlePrefix, 'FontSize', 14, 'FontWeight', 'bold');
 
@@ -366,18 +443,17 @@ function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors
     x = 1:numel(groupNames);
     b = bar(ax, x, values);
     b.FaceColor = 'flat';
-    for i = 1:size(colors, 1)
+    for i = 1:numel(values)
         b.CData(i,:) = colors(i,:);
     end
     hold(ax, 'on');
-
-    errorbar(ax, x, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
-
+    errorbar(ax, x, values, errors, 'k', 'linestyle', 'none', 'LineWidth', 1.2);
+    hold(ax, 'off');
     set(ax, 'XTick', x, 'XTickLabel', groupNames, 'FontSize', 10);
-    ylabel(ax, yLabelText, 'FontSize', 11, 'FontWeight', 'bold');
-    title(ax, titleText, 'FontSize', 12, 'FontWeight', 'bold');
+    xtickangle(ax, 30);
+    ylabel(ax, yLabelText);
+    title(ax, titleText);
     grid(ax, 'on');
-    xtickangle(ax, 20);
 
     if smartYLim
         validValues = values(~isnan(values));
@@ -390,8 +466,6 @@ function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors
             if vRange > 0
                 margin = vRange * 0.15;
                 ylim(ax, [vMin - margin, vMax + margin]);
-            elseif vMin ~= 0
-                ylim(ax, [vMin * 0.95, vMin * 1.05]);
             end
         end
     end

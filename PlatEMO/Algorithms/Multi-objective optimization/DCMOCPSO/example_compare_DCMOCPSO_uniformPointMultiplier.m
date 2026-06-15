@@ -11,7 +11,7 @@
 clear; clc; close all;
 
 %% Settings
-n = 8;
+n = 20;
 
 % Start and warm up the parallel pool before per-run timing begins, so the
 % parpool startup cost is not counted in any algorithm runtime.
@@ -34,7 +34,7 @@ uniformPointMultipliers = [1, 3, 5, 10, 20];
 
 % Result cache. Use multiplier-specific files to avoid mixing different
 % parameter settings with older FULL cache results.
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results');
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'uniform_point_multiplier');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
@@ -114,11 +114,16 @@ fprintf('\nSummary saved to: %s\n', summaryFile);
 %% Plot comparisons
 colors = lines(numGroups);
 
-plotBarComparison('HV comparison', 'Mean of last HV', ...
-    'DCMOCPSO FULL: UniformPoint Multiplier HV', groupNames, meanHV, colors, [200, 200, 760, 500], true);
+figure('Name', 'UniformPoint Multiplier metrics', ...
+    'Color', 'w', 'Position', [200, 200, 1200, 520]);
+layout = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+title(layout, 'DCMOCPSO FULL: UniformPoint Multiplier', 'FontSize', 14, 'FontWeight', 'bold');
 
-plotBarComparison('Runtime comparison', 'Mean runtime (seconds)', ...
-    'DCMOCPSO FULL: UniformPoint Multiplier Runtime', groupNames, meanRuntime, colors, [980, 200, 760, 500], false);
+plotBarComparison(nexttile(layout), 'Mean of last HV', ...
+    'HV', groupNames, meanHV, colors, true);
+
+plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
+    'Runtime', groupNames, meanRuntime, colors, false);
 
 
 %% ===================== local functions =====================
@@ -133,6 +138,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
     objMetricSummary = cell(1,n);
     lastAlgorithm = [];
     lastProblem = [];
+    loadCount = 0;
 
     if exist(cacheFile, 'file') == 2
         S = load(cacheFile);
@@ -164,7 +170,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
                     objMetricSummary{i} = runs(i).objMetricSummary;
                 end
             end
-            if loadCount >= n && all(~isnan(hvLast)) && all(~isnan(meanSignal)) && all(~isnan(meanSwitchCount)) && all(~isnan(meanCoverageRatio))
+            if loadCount >= n
                 return;
             end
         end
@@ -175,10 +181,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
         return;
     end
 
-    startRun = find(isnan(hvLast) | isnan(meanSignal) | isnan(meanSwitchCount) | isnan(meanCoverageRatio), 1);
-    if isempty(startRun)
-        return;
-    end
+    startRun = loadCount + 1;
 
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
     runs = struct('hv', {}, 'actualFE', {}, 'runtime', {}, 'meanSignal', {}, 'meanSwitchCount', {}, 'meanCoverageRatio', {}, 'objMetricSummary', {});
@@ -294,20 +297,19 @@ function value = meanValid(values)
     end
 end
 
-function plotBarComparison(figName, yLabelText, titleText, groupNames, values, colors, position, smartYLim)
-    figure('Name', figName, 'Position', position);
-    x = categorical(groupNames);
-    x = reordercats(x, groupNames);
+function plotBarComparison(ax, yLabelText, titleText, groupNames, values, colors, smartYLim)
+    x = 1:numel(groupNames);
 
-    b = bar(x, values);
+    b = bar(ax, x, values);
     b.FaceColor = 'flat';
     for i = 1:size(colors, 1)
         b.CData(i,:) = colors(i,:);
     end
 
-    ylabel(yLabelText, 'FontSize', 12, 'FontWeight', 'bold');
-    title(titleText, 'FontSize', 14, 'FontWeight', 'bold');
-    grid on;
+    set(ax, 'XTick', x, 'XTickLabel', groupNames, 'FontSize', 10);
+    ylabel(ax, yLabelText, 'FontSize', 11, 'FontWeight', 'bold');
+    title(ax, titleText, 'FontSize', 12, 'FontWeight', 'bold');
+    grid(ax, 'on');
 
     if smartYLim
         validValues = values(~isnan(values));
@@ -317,9 +319,9 @@ function plotBarComparison(figName, yLabelText, titleText, groupNames, values, c
             vRange = vMax - vMin;
             if vRange > 0
                 margin = vRange * 0.15;
-                ylim([vMin - margin, vMax + margin]);
+                ylim(ax, [vMin - margin, vMax + margin]);
             elseif vMin ~= 0
-                ylim([vMin * 0.95, vMin * 1.05]);
+                ylim(ax, [vMin * 0.95, vMin * 1.05]);
             end
         end
     end

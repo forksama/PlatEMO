@@ -1,54 +1,42 @@
-% example_compare_UAVPathPlanning_lookahead_only_OneSeg.m
+% example_ablation_UAVPathPlanning_velocity_FullParam.m
 %
-% Compare only the UAVPathPlanning proactive lookahead handover algorithm
-% under the same single-segment, non-enhanced DCMOCPSO configuration.
+% One-factor ablation for UAV maximum velocity in UAVPathPlanning.
 %
-% Goal:
-%   Isolate the effect of UAVPathPlanning switchMethod=2 by excluding the
-%   divide-and-conquer segmentation and the DCMOCPSO/MOCPSO_Ek enhancements.
-%
-% Compared groups:
-%   1) OneSeg_Base      : param_OneSeg + switchMethod=0
-%   2) OneSeg_Lookahead : param_OneSeg + switchMethod=2
+% Algorithm settings are fixed to Full_Lookahead/full_param:
+%   {5, 2, 0.5, 0.3, true, true, true} + switchMethod=2
 
 clear; clc; close all;
 
 %% Settings
-n = 10;
+n = 20;
 
-% Start and warm up the parallel pool before per-run timing begins, so the
-% parpool startup cost is not counted in any algorithm runtime.
 enableParallelPool = true;
 parallelPoolProfile = 'Processes';
 parallelPoolNumWorkers = [];
 prepareParallelPool(enableParallelPool, parallelPoolProfile, parallelPoolNumWorkers);
 
-% UAVPathPlanning parameters:
-% {bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx,
-%  switchMethod, lookaheadDistance}
 N = 20;
-problemParameter_Base = {20, 20, 5, -101.5, 0, 30, 0, 500};
-problemParameter_Lookahead = problemParameter_Base;
-problemParameter_Lookahead{7} = 2;
+baseProblemParameter = {20, 20, 5, -101.5, 0, 30, 2, 500, 10, 4};
 
-% Single-segment non-enhanced configuration requested by the user.
-% param_OneSeg: {numSegments, segmentOverlap, lambda, c_guide,
-%                useDynamicGrouping, useDynamicMutation, useEk}
-maxFE_OneSeg = 100;
-param_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
+velocityList = [10, 15, 20, 25, 30];
 
-groupNames = {'OneSeg_Base', 'OneSeg_Lookahead'};
-groupProblemParams = {problemParameter_Base, problemParameter_Lookahead};
+maxFE_Full = 100;
+param_Full = {5, 2, 0.5, 0.3, true, true, true};
 
-% Result cache. Use experiment-specific files to avoid mixing with older
-% OneSeg caches from broader DCMOCPSO ablation scripts.
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results');
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'velocity_full_param');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
 
-%% Run or load groups
-numGroups = numel(groupNames);
+commonConfig = struct( ...
+    'N', N, ...
+    'maxFE', maxFE_Full, ...
+    'baseProblemParameter', {baseProblemParameter}, ...
+    'param_Full', {param_Full});
+
+%% Run or load velocity groups
+numGroups = numel(velocityList);
+groupNames = cell(1, numGroups);
 hvLastAll = cell(1, numGroups);
 hvSeriesAll = cell(1, numGroups);
 actualFEAll = cell(1, numGroups);
@@ -58,15 +46,19 @@ meanSwitchCountAll = cell(1, numGroups);
 meanCoverageRatioAll = cell(1, numGroups);
 objMetricSummaryAll = cell(1, numGroups);
 
-fprintf('\n=== UAVPathPlanning lookahead-only comparison with param_OneSeg (n=%d) ===\n', n);
-fprintf('Algorithm parameters are fixed to param_OneSeg = {1, 2, 0.5, 0.3, false, false, false}.\n');
-fprintf('Only UAVPathPlanning switchMethod differs: 0 vs 2.\n');
+fprintf('\n=== Full_Lookahead velocity ablation (n=%d) ===\n', n);
+fprintf('Common settings: N=%d, maxFE=%d, param_Full={5,2,0.5,0.3,true,true,true}\n', ...
+    commonConfig.N, commonConfig.maxFE);
 
 for i = 1:numGroups
-    cacheFile = fullfile(cacheDir, sprintf('LookaheadOnly_%s_HV_runs.mat', groupNames{i}));
+    velocity = velocityList(i);
+    groupNames{i} = sprintf('v%s', valueTag(velocity));
+    problemParameter = makeProblemParameter(baseProblemParameter, velocity);
+    cacheFile = fullfile(cacheDir, sprintf('Velocity_Full_v%s_HV_objMetrics_runs.mat', valueTag(velocity)));
+
     [hvLastAll{i}, hvSeriesAll{i}, actualFEAll{i}, runtimeAll{i}, meanSignalAll{i}, meanSwitchCountAll{i}, meanCoverageRatioAll{i}, objMetricSummaryAll{i}] = runOrLoad( ...
         groupNames{i}, cacheFile, n, ...
-        @() runOne_DCMOCPSO(N, maxFE_OneSeg, groupProblemParams{i}, param_OneSeg), ...
+        @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE, problemParameter, commonConfig.param_Full), ...
         true);
 end
 
@@ -84,15 +76,15 @@ meanCoverageRatio = nan(1, numGroups);
 stdCoverageRatio = nan(1, numGroups);
 validCount = zeros(1, numGroups);
 
-fprintf('\n--- Lookahead-only summary ---\n');
+fprintf('\n--- Velocity summary ---\n');
 for i = 1:numGroups
     validIdx = ~isnan(hvLastAll{i});
     validCount(i) = sum(validIdx);
-    meanHV(i) = mean(hvLastAll{i}(validIdx));
-    stdHV(i) = std(hvLastAll{i}(validIdx));
-    meanRuntime(i) = mean(runtimeAll{i}(validIdx));
-    stdRuntime(i) = std(runtimeAll{i}(validIdx));
-    meanActualFE(i) = mean(actualFEAll{i}(validIdx));
+    meanHV(i) = meanValid(hvLastAll{i}(validIdx));
+    stdHV(i) = stdValid(hvLastAll{i}(validIdx));
+    meanRuntime(i) = meanValid(runtimeAll{i}(validIdx));
+    stdRuntime(i) = stdValid(runtimeAll{i}(validIdx));
+    meanActualFE(i) = meanValid(actualFEAll{i}(validIdx));
     meanSignal(i) = meanValid(meanSignalAll{i}(validIdx));
     stdSignal(i) = stdValid(meanSignalAll{i}(validIdx));
     meanSwitchCount(i) = meanValid(meanSwitchCountAll{i}(validIdx));
@@ -100,16 +92,16 @@ for i = 1:numGroups
     meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
     stdCoverageRatio(i) = stdValid(meanCoverageRatioAll{i}(validIdx));
 
-    fprintf('%-18s : switchMethod=%d, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, std=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-        groupNames{i}, groupProblemParams{i}{7}, meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), stdRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
+    fprintf('%-12s : velocity=%g m/s, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+        groupNames{i}, velocityList(i), ...
+        meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
 end
 
 results = struct();
-results.experimentName = 'UAVPathPlanningLookaheadOnlyOneSeg';
+results.experimentName = 'VelocityFullParamSweep';
 results.groupNames = groupNames;
-results.groupProblemParams = groupProblemParams;
-results.param_OneSeg = param_OneSeg;
-results.maxFE_OneSeg = maxFE_OneSeg;
+results.velocityList = velocityList;
+results.commonConfig = commonConfig;
 results.hvLastAll = hvLastAll;
 results.hvSeriesAll = hvSeriesAll;
 results.actualFEAll = actualFEAll;
@@ -131,21 +123,29 @@ results.meanCoverageRatio = meanCoverageRatio;
 results.stdCoverageRatio = stdCoverageRatio;
 results.validCount = validCount;
 
-summaryFile = fullfile(cacheDir, 'LookaheadOnly_OneSeg_summary.mat');
+summaryFile = fullfile(cacheDir, 'Velocity_Full_sweep_summary.mat');
 save(summaryFile, 'results');
 fprintf('\nSummary saved to: %s\n', summaryFile);
 
 %% Plot comparisons
-colors = [0.78, 0.20, 0.18; 0.20, 0.42, 0.78];
-
-plotBarComparison('lookahead-only OneSeg HV', 'Mean of last HV', ...
-    'UAVPathPlanning lookahead effect only: HV', groupNames, meanHV, stdHV, colors, [200, 200, 760, 500], true);
-
-plotBarComparison('lookahead-only OneSeg runtime', 'Mean runtime (seconds)', ...
-    'UAVPathPlanning lookahead effect only: Runtime', groupNames, meanRuntime, stdRuntime, colors, [980, 200, 760, 500], false);
+colors = lines(numGroups);
+plotMetricSet('Full_Lookahead velocity sweep', groupNames, ...
+    meanHV, stdHV, meanRuntime, stdRuntime, meanSignal, stdSignal, ...
+    meanSwitchCount, stdSwitchCount, meanCoverageRatio, stdCoverageRatio, ...
+    colors, [200, 200], true);
 
 
 %% ===================== local functions =====================
+function problemParameter = makeProblemParameter(baseProblemParameter, velocity)
+    problemParameter = baseProblemParameter;
+    problemParameter{2} = velocity;
+    problemParameter{7} = 2;
+end
+
+function tag = valueTag(value)
+    tag = strrep(sprintf('%g', value), '.', 'p');
+end
+
 function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
     hvLast = nan(1,n);
     hvSeries = cell(1,n);
@@ -159,6 +159,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
     lastProblem = [];
 
     runs = struct('hv', {}, 'actualFE', {}, 'runtime', {}, 'meanSignal', {}, 'meanSwitchCount', {}, 'meanCoverageRatio', {}, 'objMetricSummary', {});
+    loadCount = 0;
     if exist(cacheFile, 'file') == 2
         S = load(cacheFile);
         if isfield(S, 'runs')
@@ -189,7 +190,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
                     objMetricSummary{i} = runs(i).objMetricSummary;
                 end
             end
-            if loadCount >= n && all(~isnan(hvLast)) && all(~isnan(meanSignal)) && all(~isnan(meanSwitchCount)) && all(~isnan(meanCoverageRatio))
+            if loadCount >= n
                 return;
             end
         end
@@ -200,10 +201,7 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
         return;
     end
 
-    startRun = find(isnan(hvLast) | isnan(meanSignal) | isnan(meanSwitchCount) | isnan(meanCoverageRatio), 1);
-    if isempty(startRun)
-        return;
-    end
+    startRun = loadCount + 1;
 
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
 
@@ -260,8 +258,8 @@ function prepareParallelPool(enableParallelPool, poolProfile, numWorkers)
     fprintf('[Parallel] Pool ready with %d worker(s).\n', pool.NumWorkers);
 end
 
-function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, param_DCMOCPSO)
-    Algorithm = DCMOCPSO('parameter', param_DCMOCPSO, 'outputFcn', @(~,~)[]);
+function [hv, actualFE, runtime, objMetricSummary, Algorithm, Problem] = runOne_DCMOCPSO(N, maxFE, problemParameter, algorithmParameter)
+    Algorithm = DCMOCPSO('parameter', algorithmParameter, 'outputFcn', @(~,~)[]);
     Problem = UAVPathPlanning('N', N, 'maxFE', maxFE, 'parameter', problemParameter);
     tStart = tic;
     Algorithm.Solve(Problem);
@@ -322,24 +320,48 @@ function value = stdValid(values)
     end
 end
 
-function plotBarComparison(figName, yLabelText, titleText, groupNames, values, errors, colors, position, smartYLim)
-    figure('Name', figName, 'Position', position);
-    x = categorical(groupNames);
-    x = reordercats(x, groupNames);
+function plotMetricSet(titlePrefix, groupNames, meanHV, stdHV, meanRuntime, stdRuntime, meanSignal, stdSignal, meanSwitchCount, stdSwitchCount, meanCoverageRatio, stdCoverageRatio, colors, basePosition, smartHVYLim)
+    x0 = basePosition(1);
+    y0 = basePosition(2);
+    figure('Name', sprintf('%s metrics', titlePrefix), ...
+        'Color', 'w', 'Position', [x0, y0, 1500, 900]);
+    layout = tiledlayout(2, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(layout, titlePrefix, 'FontSize', 14, 'FontWeight', 'bold');
 
-    b = bar(x, values);
+    plotBarComparison(nexttile(layout), 'Mean of last HV', ...
+        'HV', groupNames, meanHV, stdHV, colors, smartHVYLim);
+
+    plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
+        'Runtime', groupNames, meanRuntime, stdRuntime, colors, false);
+
+    plotBarComparison(nexttile(layout), 'Mean signal strength (dBm)', ...
+        'Signal', groupNames, meanSignal, stdSignal, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean switch count', ...
+        'Switch Count', groupNames, meanSwitchCount, stdSwitchCount, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean coverage ratio', ...
+        'Coverage', groupNames, meanCoverageRatio, stdCoverageRatio, colors, true);
+
+    axis(nexttile(layout), 'off');
+end
+
+function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors, colors, smartYLim)
+    x = 1:numel(groupNames);
+    b = bar(ax, x, values);
     b.FaceColor = 'flat';
     for i = 1:size(colors, 1)
         b.CData(i,:) = colors(i,:);
     end
-    hold on;
+    hold(ax, 'on');
 
-    xPos = 1:numel(groupNames);
-    errorbar(xPos, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
+    errorbar(ax, x, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
 
-    ylabel(yLabelText, 'FontSize', 12, 'FontWeight', 'bold');
-    title(titleText, 'FontSize', 14, 'FontWeight', 'bold');
-    grid on;
+    set(ax, 'XTick', x, 'XTickLabel', groupNames, 'FontSize', 10);
+    ylabel(ax, yLabelText, 'FontSize', 11, 'FontWeight', 'bold');
+    title(ax, titleText, 'FontSize', 12, 'FontWeight', 'bold');
+    grid(ax, 'on');
+    xtickangle(ax, 20);
 
     if smartYLim
         validValues = values(~isnan(values));
@@ -351,9 +373,9 @@ function plotBarComparison(figName, yLabelText, titleText, groupNames, values, e
             vRange = vMax - vMin;
             if vRange > 0
                 margin = vRange * 0.15;
-                ylim([vMin - margin, vMax + margin]);
+                ylim(ax, [vMin - margin, vMax + margin]);
             elseif vMin ~= 0
-                ylim([vMin * 0.95, vMin * 1.05]);
+                ylim(ax, [vMin * 0.95, vMin * 1.05]);
             end
         end
     end

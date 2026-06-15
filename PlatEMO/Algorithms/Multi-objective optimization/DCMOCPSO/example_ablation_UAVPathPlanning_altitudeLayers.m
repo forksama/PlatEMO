@@ -1,109 +1,80 @@
-% example_ablation_DCMOCPSO_lookaheadMargins.m
+% example_ablation_UAVPathPlanning_altitudeLayers.m
 %
-% One-factor comparison for the lookahead handover margins used by
-% UAVPathPlanning switchMethod=2, with DCMOCPSO enhancements disabled:
-%   - lookaheadHysteresisRange: dynamic hysteresis range, in dB
-%   - lookaheadSafetyMargin: safety margin, in dB
+% One-factor ablation for literature-motivated flight altitude layers and
+% the matching altitude bounds in UAVPathPlanning.
 %
-% The algorithm parameter is fixed to:
-%   param_OneSeg = {1, 2, 0.5, 0.3, false, false, false}
-% so this script observes the lookahead mechanism in UAVPathPlanning while
-% excluding dynamic grouping, dynamic mutation, and EK guidance effects.
+% Each group uses fixed +/-10 m altitude bounds:
+%   altitudeCenterList = [30, 50, 70, 90, 110]
+%   altitudeBoundOffset = 10
 %
-% The ninth and tenth UAVPathPlanning parameters are optional. When omitted,
-% UAVPathPlanning keeps the current defaults:
-%   lookaheadHysteresisRange = 10 dB
-%   lookaheadSafetyMargin    = 4 dB
-%
-% Each parameter setting is cached independently. After every successful
-% independent run, the corresponding cache file is saved immediately.
+% Other settings follow the Full_Lookahead/full_param experiments:
+%   Full_Lookahead/full_param = {5, 2, 0.5, 0.3, true, true, true}
+%   baseProblemParameter      = {20, 20, 5, -101.5, 0, 30, 2, 500, 10, 4}
 
 clear; clc; close all;
 
 %% Settings
 n = 20;
 
-% Start and warm up the parallel pool before per-run timing begins, so the
-% parpool startup cost is not counted in any algorithm runtime.
 enableParallelPool = true;
 parallelPoolProfile = 'Processes';
 parallelPoolNumWorkers = [];
 prepareParallelPool(enableParallelPool, parallelPoolProfile, parallelPoolNumWorkers);
 
-% UAVPathPlanning base parameters:
-% {bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx,
-%  switchMethod, lookaheadDistance, lookaheadHysteresisRange,
-%  lookaheadSafetyMargin}
 N = 20;
-baseProblemParameter = {20, 20, 5, -101.5, 0, 30, 2, 500};
+baseProblemParameter = {20, 20, 5, -101.5, 0, 30, 2, 500, 10, 4};
 
-% One-factor sweeps around the current defaults (10 dB, 4 dB).
-% Smaller values switch more aggressively; larger values suppress switching.
-lookaheadHysteresisRangeList = [0, 5, 10, 15, 20];
-lookaheadSafetyMarginList = [0, 2, 4, 6, 8];
-defaultHysteresisRange = 10;
-defaultSafetyMargin = 4;
+altitudeCenterList = [30, 50, 70, 90, 110];
+altitudeBoundOffset = 10;
+altitudeBoundsList = [altitudeCenterList(:) - altitudeBoundOffset, altitudeCenterList(:) + altitudeBoundOffset];
 
-% OneSeg settings. DCMOCPSO is still used as the runner, but its additional
-% mechanisms are disabled so the comparison only changes UAVPathPlanning.
-maxFE_OneSeg = 418;
-param_OneSeg = {1, 2, 0.5, 0.3, false, false, false};
+maxFE_Full = 100;
+param_Full = {5, 2, 0.5, 0.3, true, true, true};
 
-% Result cache. Use experiment-specific files to avoid mixing with older
-% DCMOCPSO ablation caches.
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'lookahead_margins_oneseg');
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'altitude_layers_module2_full_param');
 if exist(cacheDir, 'dir') ~= 7
     mkdir(cacheDir);
 end
 
 commonConfig = struct( ...
     'N', N, ...
-    'maxFE', maxFE_OneSeg, ...
+    'maxFE', maxFE_Full, ...
     'baseProblemParameter', {baseProblemParameter}, ...
-    'param_OneSeg', {param_OneSeg});
+    'param_Full', {param_Full}, ...
+    'altitudeBoundOffset', altitudeBoundOffset);
 
-%% Experiment 1: hysteresis-range sweep
-hysteresisGroupNames = arrayfun(@(v) sprintf('hyst_%sdB', valueTag(v)), lookaheadHysteresisRangeList, 'UniformOutput', false);
-hysteresisGroupParams = cell(1, numel(lookaheadHysteresisRangeList));
-for i = 1:numel(lookaheadHysteresisRangeList)
-    hysteresisGroupParams{i} = makeProblemParameter(baseProblemParameter, lookaheadHysteresisRangeList(i), defaultSafetyMargin);
+%% Altitude center sweep
+numGroups = numel(altitudeCenterList);
+groupNames = cell(1, numGroups);
+problemParams = cell(1, numGroups);
+for i = 1:numGroups
+    altitudeCenter = altitudeCenterList(i);
+    altitudeBounds = altitudeBoundsList(i, :);
+    groupNames{i} = sprintf('H%d_B%d_%d', altitudeCenter, altitudeBounds(1), altitudeBounds(2));
+    problemParams{i} = makeAltitudeProblemParameter(baseProblemParameter, altitudeCenter, altitudeBounds);
 end
 
-hysteresisResults = runExperimentSet( ...
-    'LookaheadHysteresisOneSegSweep', hysteresisGroupNames, hysteresisGroupParams, lookaheadHysteresisRangeList, ...
-    'lookaheadHysteresisRange', defaultSafetyMargin, 'lookaheadSafetyMargin', cacheDir, n, commonConfig);
+results = runExperimentSet( ...
+    'AltitudeLayers_Module2_Full', groupNames, problemParams, altitudeCenterList, altitudeBoundsList, ...
+    @(center, bounds) fullfile(cacheDir, sprintf('AltitudeLayers_Module2_Full_H%d_B%d_%d_HV_objMetrics_runs.mat', center, bounds(1), bounds(2))), ...
+    cacheDir, n, commonConfig);
 
-%% Experiment 2: safety-margin sweep
-safetyGroupNames = arrayfun(@(v) sprintf('safety_%sdB', valueTag(v)), lookaheadSafetyMarginList, 'UniformOutput', false);
-safetyGroupParams = cell(1, numel(lookaheadSafetyMarginList));
-for i = 1:numel(lookaheadSafetyMarginList)
-    safetyGroupParams{i} = makeProblemParameter(baseProblemParameter, defaultHysteresisRange, lookaheadSafetyMarginList(i));
-end
+summaryFile = fullfile(cacheDir, 'AltitudeLayers_Module2_Full_summary.mat');
+save(summaryFile, 'results', 'altitudeCenterList', 'altitudeBoundOffset', 'altitudeBoundsList', 'n', 'commonConfig');
+fprintf('\nModule-2 altitude-layer summary saved to: %s\n', summaryFile);
 
-safetyResults = runExperimentSet( ...
-    'LookaheadSafetyOneSegSweep', safetyGroupNames, safetyGroupParams, lookaheadSafetyMarginList, ...
-    'lookaheadSafetyMargin', defaultHysteresisRange, 'lookaheadHysteresisRange', cacheDir, n, commonConfig);
-
-%% Save combined summary
-combinedSummaryFile = fullfile(cacheDir, 'LookaheadMargins_OneSeg_oneFactor_summary.mat');
-save(combinedSummaryFile, 'hysteresisResults', 'safetyResults', ...
-    'lookaheadHysteresisRangeList', 'lookaheadSafetyMarginList', ...
-    'defaultHysteresisRange', 'defaultSafetyMargin', 'n', 'commonConfig');
-fprintf('\nCombined summary saved to: %s\n', combinedSummaryFile);
-
-%% Plot comparisons
-colorsHysteresis = lines(numel(lookaheadHysteresisRangeList));
-colorsSafety = lines(numel(lookaheadSafetyMarginList));
-
-plotMetricSet(sprintf('OneSeg lookahead hysteresis sweep: safety margin = %g dB', defaultSafetyMargin), ...
-    hysteresisGroupNames, hysteresisResults, colorsHysteresis, [200, 200], true);
-
-plotMetricSet(sprintf('OneSeg lookahead safety sweep: hysteresis range = %g dB', defaultHysteresisRange), ...
-    safetyGroupNames, safetyResults, colorsSafety, [1120, 200], true);
+plotMetricSet(results, 'Full_Lookahead module-2 altitude-layer sweep', [200, 200], true);
 
 
 %% ===================== local functions =====================
-function results = runExperimentSet(experimentName, groupNames, groupProblemParams, sweptValues, sweptParamName, fixedValue, fixedParamName, cacheDir, n, commonConfig)
+function problemParameter = makeAltitudeProblemParameter(baseProblemParameter, altitudeCenter, altitudeBounds)
+    problemParameter = baseProblemParameter;
+    problemParameter{7} = 2;
+    problemParameter{11} = altitudeCenter;
+    problemParameter{12} = altitudeBounds;
+end
+
+function results = runExperimentSet(experimentName, groupNames, groupProblemParams, altitudeCenterList, altitudeBoundsList, cacheFileFn, cacheDir, n, commonConfig)
     numGroups = numel(groupNames);
     hvLastAll = cell(1, numGroups);
     hvSeriesAll = cell(1, numGroups);
@@ -114,16 +85,17 @@ function results = runExperimentSet(experimentName, groupNames, groupProblemPara
     meanCoverageRatioAll = cell(1, numGroups);
     objMetricSummaryAll = cell(1, numGroups);
 
-    fprintf('\n=== %s (n=%d) ===\n', experimentName, n);
-    fprintf('Common settings: N=%d, maxFE=%d, param_OneSeg={1,2,0.5,0.3,false,false,false}, lookaheadDistance=%g m\n', ...
-        commonConfig.N, commonConfig.maxFE, commonConfig.baseProblemParameter{8});
-    fprintf('Sweeping %s; fixed %s = %.4g\n', sweptParamName, fixedParamName, fixedValue);
+    fprintf('\n=== %s ablation (n=%d) ===\n', experimentName, n);
+    fprintf('Common settings: N=%d, maxFE=%d, altitude bound offset=+/-%.0f m, param_Full={5,2,0.5,0.3,true,true,true}\n', ...
+        commonConfig.N, commonConfig.maxFE, commonConfig.altitudeBoundOffset);
+    fprintf('Altitude centers: %s m\n', mat2str(altitudeCenterList));
+    fprintf('Altitude bounds: %s m\n', mat2str(altitudeBoundsList));
 
     for i = 1:numGroups
-        cacheFile = fullfile(cacheDir, sprintf('%s_%s_HV_runs.mat', experimentName, groupNames{i}));
+        cacheFile = cacheFileFn(altitudeCenterList(i), altitudeBoundsList(i, :));
         [hvLastAll{i}, hvSeriesAll{i}, actualFEAll{i}, runtimeAll{i}, meanSignalAll{i}, meanSwitchCountAll{i}, meanCoverageRatioAll{i}, objMetricSummaryAll{i}] = runOrLoad( ...
             sprintf('%s/%s', experimentName, groupNames{i}), cacheFile, n, ...
-            @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE, groupProblemParams{i}, commonConfig.param_OneSeg), ...
+            @() runOne_DCMOCPSO(commonConfig.N, commonConfig.maxFE, groupProblemParams{i}, commonConfig.param_Full), ...
             true);
     end
 
@@ -144,11 +116,11 @@ function results = runExperimentSet(experimentName, groupNames, groupProblemPara
     for i = 1:numGroups
         validIdx = ~isnan(hvLastAll{i});
         validCount(i) = sum(validIdx);
-        meanHV(i) = mean(hvLastAll{i}(validIdx));
-        stdHV(i) = std(hvLastAll{i}(validIdx));
-        meanRuntime(i) = mean(runtimeAll{i}(validIdx));
-        stdRuntime(i) = std(runtimeAll{i}(validIdx));
-        meanActualFE(i) = mean(actualFEAll{i}(validIdx));
+        meanHV(i) = meanValid(hvLastAll{i}(validIdx));
+        stdHV(i) = stdValid(hvLastAll{i}(validIdx));
+        meanRuntime(i) = meanValid(runtimeAll{i}(validIdx));
+        stdRuntime(i) = stdValid(runtimeAll{i}(validIdx));
+        meanActualFE(i) = meanValid(actualFEAll{i}(validIdx));
         meanSignal(i) = meanValid(meanSignalAll{i}(validIdx));
         stdSignal(i) = stdValid(meanSignalAll{i}(validIdx));
         meanSwitchCount(i) = meanValid(meanSwitchCountAll{i}(validIdx));
@@ -156,18 +128,21 @@ function results = runExperimentSet(experimentName, groupNames, groupProblemPara
         meanCoverageRatio(i) = meanValid(meanCoverageRatioAll{i}(validIdx));
         stdCoverageRatio(i) = stdValid(meanCoverageRatioAll{i}(validIdx));
 
-        fprintf('%-16s : %s=%.4g, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, std=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
-            groupNames{i}, sweptParamName, sweptValues(i), meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), stdRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
+        fprintf('%-12s : center=%g m, bounds=[%g,%g] m, mean(last HV)=%.6e, std=%.6e (valid=%d/%d, actualFE mean=%.1f, runtime mean=%.2fs, signal mean=%.4f, switch mean=%.4f, coverage mean=%.4f)\n', ...
+            groupNames{i}, altitudeCenterList(i), altitudeBoundsList(i, 1), altitudeBoundsList(i, 2), ...
+            meanHV(i), stdHV(i), validCount(i), n, meanActualFE(i), meanRuntime(i), meanSignal(i), meanSwitchCount(i), meanCoverageRatio(i));
     end
 
     results = struct();
     results.experimentName = experimentName;
     results.groupNames = groupNames;
     results.groupProblemParams = groupProblemParams;
-    results.sweptParamName = sweptParamName;
-    results.sweptValues = sweptValues;
-    results.fixedParamName = fixedParamName;
-    results.fixedValue = fixedValue;
+    results.sweptParamName = 'altitudeCenter';
+    results.sweptUnit = 'm';
+    results.altitudeCenterList = altitudeCenterList;
+    results.altitudeBoundOffset = commonConfig.altitudeBoundOffset;
+    results.altitudeBoundsList = altitudeBoundsList;
+    results.commonConfig = commonConfig;
     results.hvLastAll = hvLastAll;
     results.hvSeriesAll = hvSeriesAll;
     results.actualFEAll = actualFEAll;
@@ -189,20 +164,37 @@ function results = runExperimentSet(experimentName, groupNames, groupProblemPara
     results.stdCoverageRatio = stdCoverageRatio;
     results.validCount = validCount;
 
-    summaryFile = fullfile(cacheDir, sprintf('%s_summary.mat', experimentName));
-    save(summaryFile, 'results');
-    fprintf('%s summary saved to: %s\n', experimentName, summaryFile);
+    perExperimentSummaryFile = fullfile(cacheDir, sprintf('%s_results.mat', experimentName));
+    save(perExperimentSummaryFile, 'results');
+    fprintf('%s results saved to: %s\n', experimentName, perExperimentSummaryFile);
 end
 
-function problemParameter = makeProblemParameter(baseProblemParameter, hysteresisRange, safetyMargin)
-    problemParameter = baseProblemParameter;
-    problemParameter{7} = 2;
-    problemParameter{9} = hysteresisRange;
-    problemParameter{10} = safetyMargin;
-end
+function plotMetricSet(results, titlePrefix, basePosition, smartHVYLim)
+    colors = lines(numel(results.groupNames));
+    x0 = basePosition(1);
+    y0 = basePosition(2);
 
-function tag = valueTag(value)
-    tag = strrep(sprintf('%g', value), '.', 'p');
+    figure('Name', sprintf('%s metrics', results.experimentName), ...
+        'Color', 'w', 'Position', [x0, y0, 1500, 900]);
+    layout = tiledlayout(2, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(layout, titlePrefix, 'FontSize', 14, 'FontWeight', 'bold');
+
+    plotBarComparison(nexttile(layout), 'Mean of last HV', ...
+        'HV', results.groupNames, results.meanHV, results.stdHV, colors, smartHVYLim);
+
+    plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
+        'Runtime', results.groupNames, results.meanRuntime, results.stdRuntime, colors, false);
+
+    plotBarComparison(nexttile(layout), 'Mean signal strength (dBm)', ...
+        'Signal', results.groupNames, results.meanSignal, results.stdSignal, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean switch count', ...
+        'Switch Count', results.groupNames, results.meanSwitchCount, results.stdSwitchCount, colors, true);
+
+    plotBarComparison(nexttile(layout), 'Mean coverage ratio', ...
+        'Coverage', results.groupNames, results.meanCoverageRatio, results.stdCoverageRatio, colors, true);
+
+    axis(nexttile(layout), 'off');
 end
 
 function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, meanCoverageRatio, objMetricSummary, lastAlgorithm, lastProblem] = runOrLoad(algName, cacheFile, n, runOneFn, allowRun)
@@ -261,7 +253,6 @@ function [hvLast, hvSeries, actualFE, runtime, meanSignal, meanSwitchCount, mean
     end
 
     startRun = loadCount + 1;
-
     fprintf('[%s] cache miss/incomplete -> run %d time(s)\n', algName, n - startRun + 1);
 
     for i = startRun:n
@@ -310,10 +301,8 @@ function prepareParallelPool(enableParallelPool, poolProfile, numWorkers)
         fprintf('[Parallel] Reusing existing parallel pool with %d worker(s).\n', pool.NumWorkers);
     end
 
-    warmup = zeros(1, pool.NumWorkers);
-    parfor i = 1:pool.NumWorkers
-        warmup(i) = i;
-    end
+    warmupFuture = parfeval(pool, @() 1, 1);
+    fetchOutputs(warmupFuture);
     fprintf('[Parallel] Pool ready with %d worker(s).\n', pool.NumWorkers);
 end
 
@@ -339,11 +328,12 @@ end
 function objMetricSummary = extractObjectiveMetrics(Algorithm)
     objMetricSummary = struct('meanSignal', NaN, 'meanSwitchCount', NaN, ...
         'meanCoverageRatio', NaN, 'finalPopulationSize', 0);
-    if isempty(Algorithm.result)
+
+    if isempty(Algorithm.result) || isempty(Algorithm.result{end})
         return;
     end
 
-    finalPopulation = Algorithm.result{end, 2};
+    finalPopulation = Algorithm.result{end};
     if isempty(finalPopulation)
         return;
     end
@@ -379,48 +369,20 @@ function value = stdValid(values)
     end
 end
 
-function plotMetricSet(titlePrefix, groupNames, results, colors, basePosition, smartHVYLim)
-    x0 = basePosition(1);
-    y0 = basePosition(2);
-    figure('Name', sprintf('%s metrics', titlePrefix), ...
-        'Color', 'w', 'Position', [x0, y0, 1500, 900]);
-    layout = tiledlayout(2, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
-    title(layout, titlePrefix, 'FontSize', 14, 'FontWeight', 'bold');
-
-    plotBarComparison(nexttile(layout), 'Mean of last HV', ...
-        'HV', groupNames, results.meanHV, results.stdHV, colors, smartHVYLim);
-
-    plotBarComparison(nexttile(layout), 'Mean runtime (seconds)', ...
-        'Runtime', groupNames, results.meanRuntime, results.stdRuntime, colors, false);
-
-    plotBarComparison(nexttile(layout), 'Mean signal strength (dBm)', ...
-        'Signal', groupNames, results.meanSignal, results.stdSignal, colors, true);
-
-    plotBarComparison(nexttile(layout), 'Mean switch count', ...
-        'Switch Count', groupNames, results.meanSwitchCount, results.stdSwitchCount, colors, true);
-
-    plotBarComparison(nexttile(layout), 'Mean coverage ratio', ...
-        'Coverage', groupNames, results.meanCoverageRatio, results.stdCoverageRatio, colors, true);
-
-    axis(nexttile(layout), 'off');
-end
-
 function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors, colors, smartYLim)
     x = 1:numel(groupNames);
     b = bar(ax, x, values);
     b.FaceColor = 'flat';
-    for i = 1:size(colors, 1)
+    for i = 1:numel(values)
         b.CData(i,:) = colors(i,:);
     end
     hold(ax, 'on');
-
-    errorbar(ax, x, values, errors, 'k.', 'LineWidth', 1.1, 'CapSize', 10);
-
-    set(ax, 'XTick', x, 'XTickLabel', groupNames, 'FontSize', 10);
-    ylabel(ax, yLabelText, 'FontSize', 11, 'FontWeight', 'bold');
-    title(ax, titleText, 'FontSize', 12, 'FontWeight', 'bold');
+    errorbar(ax, x, values, errors, 'k', 'linestyle', 'none', 'LineWidth', 1.2);
+    ylabel(ax, yLabelText);
+    title(ax, titleText);
     grid(ax, 'on');
-    xtickangle(ax, 20);
+    set(ax, 'FontSize', 10, 'XTick', x, 'XTickLabel', groupNames);
+    xtickangle(ax, 30);
 
     if smartYLim
         validValues = values(~isnan(values));
@@ -433,8 +395,6 @@ function plotBarComparison(ax, yLabelText, titleText, groupNames, values, errors
             if vRange > 0
                 margin = vRange * 0.15;
                 ylim(ax, [vMin - margin, vMax + margin]);
-            elseif vMin ~= 0
-                ylim(ax, [vMin * 0.95, vMin * 1.05]);
             end
         end
     end
