@@ -18,7 +18,7 @@
 
 clear; clc;
 
-cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results');
+cacheDir = fullfile(fileparts(mfilename('fullpath')), 'results', 'lambda_cguide');
 
 % Existing c_guide sweep cache files are for cGuideList = [0, 0.1, 0.3, 0.5, 0.7].
 % The requested labels were p00/p25/p50/p75/p100; here they are applied in
