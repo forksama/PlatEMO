@@ -1,6 +1,14 @@
 #忽略的文件格式
 *.asv
 ~$*.docx
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+uav_path_planning_system/.runtime/
+uav_path_planning_system/*.egg-info/
+uav_path_planning_system/test-runtime/
+uav_path_planning_system/frontend/node_modules/
+uav_path_planning_system/frontend/dist/
 
 # 忽略的文件夹
 Data/*
