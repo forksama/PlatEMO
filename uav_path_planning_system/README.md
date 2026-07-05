@@ -2,12 +2,13 @@
 
 该目录是 PlatEMO 外层仓库下新增的 Python/Web 工程，用于把现有 Matlab 算法模块工程化接入到路径规划系统中。
 
-第一版目标是打通：
+当前目标是打通：
 
-- React 前端工作台：配置场景、通信、UAV 与 DCMOCPSO 参数，展示路径、基站、建筑障碍、切换点和 Pareto 指标。
-- FastAPI 后端：提供任务创建、任务查询、结果查询接口。
+- React 前端工作台：左侧多 Tab 管理城市建模、基站、预设路径、场景组合、规划任务、任务队列和结果中心。
+- Three.js 三维场景：展示建筑物、基站、预设路径、规划路径和切换点，支持旋转、平移、缩放。
+- FastAPI 后端：提供资源管理、场景快照、任务创建、任务查询、进度日志和结果查询接口。
 - Matlab CLI 适配层：通过 `matlab -batch` 调用 PlatEMO 中的 `DCMOCPSO + UAVPathPlanning`。
-- SQLite 与本地文件持久化：保存任务元数据、输入参数、Matlab 日志、`result.json` 和 `result.mat`。
+- SQLite 与本地文件持久化：保存资源元数据、任务元数据、输入参数、Matlab 日志、`result.json` 和 `result.mat`。
 
 ## 目录结构
 
@@ -20,6 +21,7 @@ uav_path_planning_system/
       domain/          # 参数、任务、结果模型
       jobs/            # SQLite 任务存储与任务服务
       matlab/          # Matlab 调用适配层与桥接脚本
+      resources/       # 城市/基站/路径/场景资源管理
       visualization/   # 前端友好的结果映射
     tests/             # 后端单元测试
   frontend/
@@ -74,10 +76,12 @@ npm run build
 
 ## Matlab 接入边界
 
-当前工程不修改 PlatEMO 现有核心算法文件。Python 侧只新增桥接脚本：
+Python 侧新增桥接脚本：
 
 ```text
 backend/app/matlab/scripts/run_planning_job.m
 ```
 
 桥接脚本负责读取任务输入、添加 PlatEMO 路径、创建 `UAVPathPlanning` 问题对象、创建 `DCMOCPSO` 算法对象、执行优化并输出标准化结果文件。
+
+当前对 `UAVPathPlanning.m` 增加了向后兼容的第 13 个可选参数 `scenarioDataPath`，用于让系统导入或生成的城市、基站、预设路径场景真实进入 Matlab 计算。未传入该参数时，原有默认场景逻辑保持不变。
