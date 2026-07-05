@@ -196,6 +196,53 @@ button {
   border-bottom: 1px solid #d3dce0;
 }
 
+.scene-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.scene-mode-toggle {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #c9d4d8;
+  border-radius: 8px;
+  background: #f6f8f9;
+}
+
+.scene-mode-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid #c9d4d8;
+  background: transparent;
+  color: #485a64;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.scene-mode-toggle button:last-child {
+  border-right: 0;
+}
+
+.scene-mode-toggle button.active {
+  background: #1f6f57;
+  color: #ffffff;
+}
+
+.scene-mode-toggle button:focus-visible {
+  outline: 2px solid #2478a8;
+  outline-offset: -2px;
+}
+
 .scene-counts {
   display: flex;
   gap: 8px;
@@ -548,6 +595,10 @@ textarea:focus {
   .scene-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .scene-tools {
+    justify-content: flex-start;
   }
 
   .workbench-header h1 {

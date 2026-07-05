@@ -7,6 +7,7 @@ import {
   FileText,
   Layers3,
   ListChecks,
+  Move,
   Play,
   RadioTower,
   RefreshCw,
@@ -16,7 +17,7 @@ import {
   Trash2,
   Upload
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   createPresetPath,
@@ -148,6 +149,7 @@ function App() {
   const [taskLogs, setTaskLogs] = useState<TaskLogs | null>(null);
   const [result, setResult] = useState<PlanningResult | null>(null);
   const [selectedSolution, setSelectedSolution] = useState(0);
+  const [sceneControlMode, setSceneControlMode] = useState<"rotate" | "pan">("rotate");
   const [notice, setNotice] = useState("正在连接后端...");
   const [error, setError] = useState<string | null>(null);
   const [draftPoints, setDraftPoints] = useState<Array<{ x: number; y: number; z: number }>>([
@@ -176,10 +178,16 @@ function App() {
   const sceneBase = scenarioSnapshot?.baseStationSet ?? basePayload;
   const scenePath = scenarioSnapshot?.presetPath ?? pathPayload;
   const sceneResult = result ?? previewResult;
-
-  const addPointFromScene = useCallback((point: { x: number; y: number; z: number }) => {
-    setDraftPoints((current) => [...current, point]);
-  }, []);
+  const draftPath = useMemo<PresetPathPayload>(
+    () => ({
+      id: "draft",
+      name: "draft",
+      cityModelId: selectedCityId,
+      points: draftPoints.map((point, index) => ({ index, ...point }))
+    }),
+    [draftPoints, selectedCityId]
+  );
+  const displayedScenePath = activeTab === "path" ? draftPath : scenePath;
 
   useEffect(() => {
     void loadBootstrap();
@@ -681,29 +689,41 @@ function App() {
                 <p className="eyebrow">三维场景</p>
                 <h2>{selectedScenarioRecord?.name ?? sceneCity?.name ?? "当前组合"}</h2>
               </div>
-              <div className="scene-counts">
-                <span>{sceneCity?.buildings.length ?? 0} 建筑</span>
-                <span>{sceneBase?.baseStations.length ?? 0} 基站</span>
-                <span>{scenePath?.points.length ?? 0} 路径点</span>
+              <div className="scene-tools">
+                <div className="scene-mode-toggle" role="group" aria-label="三维图操作模式">
+                  <button
+                    className={sceneControlMode === "rotate" ? "active" : ""}
+                    title="左键旋转三维图"
+                    type="button"
+                    onClick={() => setSceneControlMode("rotate")}
+                  >
+                    <RefreshCw size={16} />
+                    <span>旋转</span>
+                  </button>
+                  <button
+                    className={sceneControlMode === "pan" ? "active" : ""}
+                    title="左键拖拽三维图"
+                    type="button"
+                    onClick={() => setSceneControlMode("pan")}
+                  >
+                    <Move size={16} />
+                    <span>拖拽</span>
+                  </button>
+                </div>
+                <div className="scene-counts">
+                  <span>{sceneCity?.buildings.length ?? 0} 建筑</span>
+                  <span>{sceneBase?.baseStations.length ?? 0} 基站</span>
+                  <span>{displayedScenePath?.points.length ?? 0} 路径点</span>
+                </div>
               </div>
             </div>
             <ThreeScene
               city={sceneCity}
               baseStations={sceneBase}
-              presetPath={
-                activeTab === "path"
-                  ? {
-                      id: "draft",
-                      name: "draft",
-                      cityModelId: selectedCityId,
-                      points: draftPoints.map((point, index) => ({ index, ...point }))
-                    }
-                  : scenePath
-              }
+              presetPath={displayedScenePath}
               result={activeTab === "results" ? sceneResult : null}
               selectedSolution={selectedSolution}
-              editPath={activeTab === "path"}
-              onAddPoint={addPointFromScene}
+              controlMode={sceneControlMode}
             />
           </section>
         </section>

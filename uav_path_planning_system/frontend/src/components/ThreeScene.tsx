@@ -10,14 +10,34 @@ import type {
   Waypoint
 } from "../api/client";
 
+type SceneControlMode = "rotate" | "pan";
+
 interface ThreeSceneProps {
   city: CityGeometry | null;
   baseStations: BaseStationPayload | null;
   presetPath: PresetPathPayload | null;
   result: PlanningResult | null;
   selectedSolution: number;
-  editPath?: boolean;
-  onAddPoint?: (point: { x: number; y: number; z: number }) => void;
+  controlMode?: SceneControlMode;
+}
+
+interface SceneViewState {
+  cityId: string;
+  position: [number, number, number];
+  target: [number, number, number];
+  zoom: number;
+}
+
+function applyControlMode(controls: OrbitControls, mode: SceneControlMode) {
+  controls.mouseButtons = {
+    LEFT: mode === "pan" ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: mode === "pan" ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN
+  };
+  controls.touches = {
+    ONE: mode === "pan" ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE,
+    TWO: THREE.TOUCH.DOLLY_PAN
+  };
 }
 
 function toScenePoint(point: Waypoint | { x: number; y: number; z: number }): THREE.Vector3 {
@@ -45,10 +65,19 @@ export function ThreeScene({
   presetPath,
   result,
   selectedSolution,
-  editPath = false,
-  onAddPoint
+  controlMode = "rotate"
 }: ThreeSceneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const viewStateRef = useRef<SceneViewState | null>(null);
+  const controlModeRef = useRef(controlMode);
+  controlModeRef.current = controlMode;
+
+  useEffect(() => {
+    if (controlsRef.current) {
+      applyControlMode(controlsRef.current, controlMode);
+    }
+  }, [controlMode]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -71,13 +100,34 @@ export function ThreeScene({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.screenSpacePanning = true;
+    applyControlMode(controls, controlModeRef.current);
+    controlsRef.current = controls;
 
     const bounds = city?.bounds ?? { minX: 0, minY: 0, maxX: 1000, maxY: 1000 };
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerY = (bounds.minY + bounds.maxY) / 2;
     const span = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, 400);
-    camera.position.set(centerX + span * 0.8, span * 0.75, centerY + span * 0.85);
-    controls.target.set(centerX, 0, centerY);
+    const viewCityId = city?.id ?? "empty-scene";
+    const savedView = viewStateRef.current?.cityId === viewCityId ? viewStateRef.current : null;
+    if (savedView) {
+      camera.position.set(...savedView.position);
+      camera.zoom = savedView.zoom;
+      controls.target.set(...savedView.target);
+      camera.updateProjectionMatrix();
+    } else {
+      camera.position.set(centerX + span * 0.8, span * 0.75, centerY + span * 0.85);
+      controls.target.set(centerX, 0, centerY);
+    }
+    const rememberView = () => {
+      viewStateRef.current = {
+        cityId: viewCityId,
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: [controls.target.x, controls.target.y, controls.target.z],
+        zoom: camera.zoom
+      };
+    };
+    controls.addEventListener("change", rememberView);
+    rememberView();
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x8a9398, 1.6);
     scene.add(hemi);
@@ -151,57 +201,9 @@ export function ThreeScene({
       });
     }
 
-    const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
-    let pointerDown: { x: number; y: number; button: number; moved: boolean } | null = null;
-    const addPointFromEvent = (event: PointerEvent) => {
-      if (!editPath || !onAddPoint) {
-        return;
-      }
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointer, camera);
-      const hits = raycaster.intersectObject(ground);
-      if (!hits[0]) {
-        return;
-      }
-      onAddPoint({
-        x: Math.round(hits[0].point.x),
-        y: Math.round(hits[0].point.z),
-        z: presetPath?.points[presetPath.points.length - 1]?.z ?? 50
-      });
-    };
-    const pointerDownHandler = (event: PointerEvent) => {
-      if (!editPath || event.button !== 0) {
-        pointerDown = null;
-        return;
-      }
-      pointerDown = { x: event.clientX, y: event.clientY, button: event.button, moved: false };
-    };
-    const pointerMoveHandler = (event: PointerEvent) => {
-      if (!pointerDown) {
-        return;
-      }
-      const distance = Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y);
-      if (distance > 4) {
-        pointerDown.moved = true;
-      }
-    };
-    const pointerUpHandler = (event: PointerEvent) => {
-      if (!pointerDown || pointerDown.button !== 0 || pointerDown.moved) {
-        pointerDown = null;
-        return;
-      }
-      addPointFromEvent(event);
-      pointerDown = null;
-    };
     const contextMenuHandler = (event: MouseEvent) => {
       event.preventDefault();
     };
-    renderer.domElement.addEventListener("pointerdown", pointerDownHandler);
-    renderer.domElement.addEventListener("pointermove", pointerMoveHandler);
-    renderer.domElement.addEventListener("pointerup", pointerUpHandler);
     renderer.domElement.addEventListener("contextmenu", contextMenuHandler);
 
     let frame = 0;
@@ -224,10 +226,11 @@ export function ThreeScene({
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", resize);
-      renderer.domElement.removeEventListener("pointerdown", pointerDownHandler);
-      renderer.domElement.removeEventListener("pointermove", pointerMoveHandler);
-      renderer.domElement.removeEventListener("pointerup", pointerUpHandler);
       renderer.domElement.removeEventListener("contextmenu", contextMenuHandler);
+      controls.removeEventListener("change", rememberView);
+      if (controlsRef.current === controls) {
+        controlsRef.current = null;
+      }
       controls.dispose();
       renderer.dispose();
       scene.traverse((object) => {
@@ -238,7 +241,7 @@ export function ThreeScene({
         }
       });
     };
-  }, [baseStations, city, editPath, onAddPoint, presetPath, result, selectedSolution]);
+  }, [baseStations, city, presetPath, result, selectedSolution]);
 
   return <div className="three-scene" ref={hostRef} />;
 }
