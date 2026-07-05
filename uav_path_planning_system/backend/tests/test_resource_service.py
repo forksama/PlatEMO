@@ -66,27 +66,54 @@ class ResourceServiceTests(unittest.TestCase):
             self.assertGreater(len(geometry["buildings"]), 0)
             self.assertEqual(geometry["bounds"]["maxX"], 1000)
 
-    def test_base_station_generation_is_bound_to_city_model(self) -> None:
+    def test_base_station_generation_places_stations_on_building_roofs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = self.make_service(tmp_dir)
-            city = service.generate_city_model(
+            city = service.import_city_model(
                 name="city",
-                algorithm_key="MatlabAlphaBetaGammaUniformBuildings",
-                parameters={"alpha": 0.25, "beta": 8, "gamma": 30, "seed": 1},
+                description=None,
+                source_format="json",
+                content=json.dumps(
+                    {
+                        "bounds": {"minX": 0, "minY": 0, "maxX": 1000, "maxY": 1000},
+                        "buildings": [
+                            {
+                                "id": "b1",
+                                "footprint": [[10, 20], [40, 20], [40, 60], [10, 60]],
+                                "height": 80,
+                            }
+                        ],
+                    }
+                ),
             )
 
             stations = service.generate_base_station_set(
                 city_model_id=city.id,
                 name="stations",
                 algorithm_key="MatlabDensityKMeansBaseStations",
-                parameters={"bs_per_km2": 4, "height": 45, "powerDbm": 32, "seed": 2},
+                parameters={"bs_per_km2": 2, "height": 45, "roof_offset_m": 7, "powerDbm": 32, "seed": 2},
             )
 
             payload = service.get_base_station_payload(stations.id)
             self.assertEqual(stations.city_model_id, city.id)
             self.assertEqual(stations.generation_algorithm_key, "MatlabDensityKMeansBaseStations")
-            self.assertGreaterEqual(len(payload["baseStations"]), 1)
+            self.assertEqual(len(payload["baseStations"]), 2)
+            self.assertEqual({station["z"] for station in payload["baseStations"]}, {87.0})
+            self.assertEqual(
+                {(station["x"], station["y"]) for station in payload["baseStations"]},
+                {(10.0, 20.0), (40.0, 60.0)},
+            )
             self.assertEqual(payload["baseStations"][0]["powerDbm"], 32)
+
+    def test_base_station_generation_algorithm_exposes_roof_offset_not_absolute_height(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = self.make_service(tmp_dir)
+
+            algorithm = service.get_generation_algorithms("base_station_set")[0]
+
+            parameter_keys = {parameter["key"] for parameter in algorithm["parameters"]}
+            self.assertIn("roof_offset_m", parameter_keys)
+            self.assertNotIn("height", parameter_keys)
 
     def test_preset_path_and_scenario_snapshot_keep_resource_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -105,7 +132,6 @@ class ResourceServiceTests(unittest.TestCase):
 
             path = service.create_preset_path(
                 city_model_id=city.id,
-                base_station_set_id=stations.id,
                 name="route",
                 points=[{"x": 0, "y": 0, "z": 50}, {"x": 100, "y": 100, "z": 50}],
             )
@@ -120,10 +146,44 @@ class ResourceServiceTests(unittest.TestCase):
             matlab = json.loads(Path(scenario.matlab_scenario_file_path).read_text(encoding="utf-8"))
             self.assertEqual(snapshot["cityModel"]["id"], city.id)
             self.assertEqual(snapshot["baseStationSet"]["cityModelId"], city.id)
-            self.assertEqual(snapshot["presetPath"]["baseStationSetId"], stations.id)
+            self.assertEqual(snapshot["presetPath"]["cityModelId"], city.id)
+            self.assertNotIn("baseStationSetId", snapshot["presetPath"])
             self.assertEqual(matlab["presetPath"][0], [0, 0, 50])
             self.assertIn("baseStations", matlab)
             self.assertIn("obstacles", matlab)
+
+    def test_scenario_requires_path_and_base_stations_to_belong_to_selected_city(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = self.make_service(tmp_dir)
+            city_a = service.generate_city_model(
+                name="city a",
+                algorithm_key="MatlabAlphaBetaGammaUniformBuildings",
+                parameters={"alpha": 0.25, "beta": 8, "gamma": 30, "seed": 1},
+            )
+            city_b = service.generate_city_model(
+                name="city b",
+                algorithm_key="MatlabAlphaBetaGammaUniformBuildings",
+                parameters={"alpha": 0.25, "beta": 8, "gamma": 30, "seed": 2},
+            )
+            stations = service.generate_base_station_set(
+                city_model_id=city_a.id,
+                name="stations",
+                algorithm_key="MatlabDensityKMeansBaseStations",
+                parameters={"bs_per_km2": 4, "seed": 2},
+            )
+            path = service.create_preset_path(
+                city_model_id=city_b.id,
+                name="route",
+                points=[{"x": 0, "y": 0, "z": 50}, {"x": 100, "y": 100, "z": 50}],
+            )
+
+            with self.assertRaisesRegex(ValueError, "Preset path must belong to the selected city model"):
+                service.create_scenario(
+                    name="invalid scenario",
+                    city_model_id=city_a.id,
+                    base_station_set_id=stations.id,
+                    preset_path_id=path.id,
+                )
 
     def test_import_specs_explain_supported_file_formats(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

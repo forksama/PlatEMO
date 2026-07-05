@@ -49,7 +49,6 @@ class PresetPathRecord:
     id: str
     name: str
     city_model_id: str
-    base_station_set_id: str
     source_type: str
     source_format: str | None
     source_file_path: str | None
@@ -129,7 +128,6 @@ class ResourceStore:
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     city_model_id TEXT NOT NULL,
-                    base_station_set_id TEXT NOT NULL,
                     source_type TEXT NOT NULL,
                     source_format TEXT,
                     source_file_path TEXT,
@@ -141,6 +139,7 @@ class ResourceStore:
                 )
                 """
             )
+            self._migrate_preset_paths_schema(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS scenarios (
@@ -157,6 +156,41 @@ class ResourceStore:
                 )
                 """
             )
+
+    def _migrate_preset_paths_schema(self, conn: sqlite3.Connection) -> None:
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(preset_paths)").fetchall()]
+        if "base_station_set_id" not in columns:
+            return
+        conn.execute("ALTER TABLE preset_paths RENAME TO preset_paths_old")
+        conn.execute(
+            """
+            CREATE TABLE preset_paths (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                city_model_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_format TEXT,
+                source_file_path TEXT,
+                normalized_file_path TEXT NOT NULL,
+                point_count INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        columns_sql = """
+            id, name, city_model_id, source_type, source_format, source_file_path,
+            normalized_file_path, point_count, metadata_json, created_at, updated_at
+        """
+        conn.execute(
+            f"""
+            INSERT INTO preset_paths({columns_sql})
+            SELECT {columns_sql}
+            FROM preset_paths_old
+            """
+        )
+        conn.execute("DROP TABLE preset_paths_old")
 
     def create_city_model(
         self,
@@ -347,7 +381,6 @@ class ResourceStore:
         id: str,
         name: str,
         city_model_id: str,
-        base_station_set_id: str,
         source_type: str,
         source_format: str | None,
         source_file_path: str | None,
@@ -360,7 +393,6 @@ class ResourceStore:
             id=id,
             name=name,
             city_model_id=city_model_id,
-            base_station_set_id=base_station_set_id,
             source_type=source_type,
             source_format=source_format,
             source_file_path=source_file_path,
@@ -374,17 +406,16 @@ class ResourceStore:
             conn.execute(
                 """
                 INSERT INTO preset_paths(
-                    id, name, city_model_id, base_station_set_id, source_type, source_format,
-                    source_file_path, normalized_file_path, point_count, metadata_json,
+                    id, name, city_model_id, source_type, source_format, source_file_path,
+                    normalized_file_path, point_count, metadata_json,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
                     record.name,
                     record.city_model_id,
-                    record.base_station_set_id,
                     record.source_type,
                     record.source_format,
                     record.source_file_path,
@@ -401,8 +432,8 @@ class ResourceStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, name, city_model_id, base_station_set_id, source_type, source_format,
-                       source_file_path, normalized_file_path, point_count, metadata_json,
+                SELECT id, name, city_model_id, source_type, source_format, source_file_path,
+                       normalized_file_path, point_count, metadata_json,
                        created_at, updated_at
                 FROM preset_paths WHERE id = ?
                 """,
@@ -414,8 +445,8 @@ class ResourceStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, name, city_model_id, base_station_set_id, source_type, source_format,
-                       source_file_path, normalized_file_path, point_count, metadata_json,
+                SELECT id, name, city_model_id, source_type, source_format, source_file_path,
+                       normalized_file_path, point_count, metadata_json,
                        created_at, updated_at
                 FROM preset_paths ORDER BY created_at DESC
                 """

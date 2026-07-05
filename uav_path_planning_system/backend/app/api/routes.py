@@ -46,7 +46,6 @@ def create_router(service: JobService, artifact_root: Path, resource_service: Re
 
     class PresetPathCreateRequest(BaseModel):
         city_model_id: str = Field(alias="cityModelId")
-        base_station_set_id: str = Field(alias="baseStationSetId")
         name: str
         points: list[dict[str, Any]]
 
@@ -54,7 +53,6 @@ def create_router(service: JobService, artifact_root: Path, resource_service: Re
 
     class PresetPathImportRequest(ImportRequest):
         city_model_id: str = Field(alias="cityModelId")
-        base_station_set_id: str = Field(alias="baseStationSetId")
 
     class ScenarioCreateRequest(BaseModel):
         name: str
@@ -218,7 +216,6 @@ def create_router(service: JobService, artifact_root: Path, resource_service: Re
         try:
             return resource_service.create_preset_path(
                 city_model_id=request.city_model_id,
-                base_station_set_id=request.base_station_set_id,
                 name=request.name,
                 points=request.points,
             )
@@ -230,7 +227,6 @@ def create_router(service: JobService, artifact_root: Path, resource_service: Re
         try:
             return resource_service.import_preset_path(
                 city_model_id=request.city_model_id,
-                base_station_set_id=request.base_station_set_id,
                 name=request.name,
                 source_format=request.source_format,
                 content=request.content,

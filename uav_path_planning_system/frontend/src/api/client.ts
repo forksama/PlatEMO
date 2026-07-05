@@ -180,7 +180,6 @@ export interface PresetPathPayload {
   id: string;
   name: string;
   cityModelId: string;
-  baseStationSetId: string;
   points: PresetPoint[];
 }
 
@@ -454,7 +453,6 @@ export function getPresetPath(pathId: string): Promise<PresetPathPayload> {
 
 export function createPresetPath(body: {
   cityModelId: string;
-  baseStationSetId: string;
   name: string;
   points: Array<{ x: number; y: number; z: number }>;
 }): Promise<ResourceRecord> {
@@ -466,7 +464,6 @@ export function createPresetPath(body: {
 
 export function importPresetPath(body: {
   cityModelId: string;
-  baseStationSetId: string;
   name: string;
   sourceFormat: string;
   content: string;

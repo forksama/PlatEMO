@@ -92,7 +92,7 @@ class ResourceService:
                 "requires": ["cityModel"],
                 "parameters": [
                     {"key": "bs_per_km2", "type": "number", "required": True, "default": 20},
-                    {"key": "height", "type": "number", "required": False},
+                    {"key": "roof_offset_m", "type": "number", "required": False, "default": 5},
                     {"key": "powerDbm", "type": "number", "required": False, "default": 30},
                     {"key": "seed", "type": "integer", "required": False, "default": 1},
                 ],
@@ -341,16 +341,14 @@ class ResourceService:
         self,
         *,
         city_model_id: str,
-        base_station_set_id: str,
         name: str,
         points: list[dict[str, Any]],
     ) -> PresetPathRecord:
         path_id = _new_id("path")
-        payload = self._make_preset_path_payload(path_id, city_model_id, base_station_set_id, name, points)
+        payload = self._make_preset_path_payload(path_id, city_model_id, name, points)
         return self._save_preset_path(
             path_id=path_id,
             city_model_id=city_model_id,
-            base_station_set_id=base_station_set_id,
             name=name,
             payload=payload,
             source_type="manual",
@@ -362,18 +360,16 @@ class ResourceService:
         self,
         *,
         city_model_id: str,
-        base_station_set_id: str,
         name: str,
         source_format: str,
         content: str,
     ) -> PresetPathRecord:
         path_id = _new_id("path")
         points = self._parse_path_content(source_format, content)
-        payload = self._make_preset_path_payload(path_id, city_model_id, base_station_set_id, name, points)
+        payload = self._make_preset_path_payload(path_id, city_model_id, name, points)
         return self._save_preset_path(
             path_id=path_id,
             city_model_id=city_model_id,
-            base_station_set_id=base_station_set_id,
             name=name,
             payload=payload,
             source_type="imported",
@@ -386,14 +382,13 @@ class ResourceService:
         *,
         path_id: str,
         city_model_id: str,
-        base_station_set_id: str,
         name: str,
         payload: dict[str, Any],
         source_type: str,
         source_format: str | None,
         source_content: str | None,
     ) -> PresetPathRecord:
-        self._validate_base_station_city(city_model_id, base_station_set_id)
+        self._require_city(city_model_id)
         path_dir = self.resource_root / "preset_paths" / path_id
         normalized_path = path_dir / "normalized.json"
         source_path: Path | None = None
@@ -406,7 +401,6 @@ class ResourceService:
             id=path_id,
             name=name,
             city_model_id=city_model_id,
-            base_station_set_id=base_station_set_id,
             source_type=source_type,
             source_format=source_format,
             source_file_path=str(source_path) if source_path else None,
@@ -429,8 +423,8 @@ class ResourceService:
     ) -> ScenarioRecord:
         self._validate_base_station_city(city_model_id, base_station_set_id)
         path = self._require_preset_path(preset_path_id)
-        if path.city_model_id != city_model_id or path.base_station_set_id != base_station_set_id:
-            raise ResourceValidationError("Preset path must belong to the selected city/base station set")
+        if path.city_model_id != city_model_id:
+            raise ResourceValidationError("Preset path must belong to the selected city model")
 
         scenario_id = _new_id("scenario")
         scenario_dir = self.resource_root / "scenarios" / scenario_id
@@ -625,10 +619,10 @@ class ResourceService:
         total_stations = max(1, round(bs_per_km2 * area_km2))
         building_count = max(1, min(len(city["buildings"]), math.ceil(total_stations / 2)))
         selected = self._select_buildings(city["buildings"], building_count, seed)
-        configured_height = parameters.get("height")
+        roof_offset_m = float(parameters.get("roof_offset_m", parameters.get("roofOffsetM", 5)))
         stations = []
         for building in selected:
-            z_value = float(configured_height) if configured_height is not None else float(building["height"]) + 5
+            z_value = float(building["height"]) + roof_offset_m
             for x_key, y_key in (("xMin", "yMin"), ("xMax", "yMax")):
                 stations.append(
                     {
@@ -701,11 +695,10 @@ class ResourceService:
         self,
         path_id: str,
         city_model_id: str,
-        base_station_set_id: str,
         name: str,
         points: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        self._validate_base_station_city(city_model_id, base_station_set_id)
+        self._require_city(city_model_id)
         if len(points) < 2:
             raise ResourceValidationError("Preset path requires at least two points")
         normalized_points = [
@@ -716,7 +709,6 @@ class ResourceService:
             "id": path_id,
             "name": name,
             "cityModelId": city_model_id,
-            "baseStationSetId": base_station_set_id,
             "points": normalized_points,
         }
 

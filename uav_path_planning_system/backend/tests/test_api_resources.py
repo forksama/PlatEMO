@@ -61,7 +61,6 @@ class ApiResourceTests(unittest.TestCase):
                 "/api/preset-paths",
                 json={
                     "cityModelId": city_id,
-                    "baseStationSetId": station_id,
                     "name": "route",
                     "points": [{"x": 0, "y": 0, "z": 50}, {"x": 100, "y": 100, "z": 50}],
                 },

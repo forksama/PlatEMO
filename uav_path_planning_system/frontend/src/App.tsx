@@ -157,7 +157,7 @@ function App() {
   const [baseImport, setBaseImport] = useState({ format: "json", content: "" });
   const [pathImport, setPathImport] = useState({ format: "json", content: "" });
   const [cityParams, setCityParams] = useState({ alpha: 0.3265, beta: 204.08, gamma: 40, seed: 1 });
-  const [baseParams, setBaseParams] = useState({ bs_per_km2: 20, height: 45, powerDbm: 30, seed: 1 });
+  const [baseParams, setBaseParams] = useState({ bs_per_km2: 20, roof_offset_m: 5, powerDbm: 30, seed: 1 });
   const [isBusy, setIsBusy] = useState(false);
 
   const cityAlgorithm = generationAlgorithms.find((item) => item.targetType === "city_model");
@@ -166,6 +166,10 @@ function App() {
   const selectedScenarioRecord = scenarios.find((item) => item.id === selectedScenarioId) ?? null;
   const runningTasks = tasks.filter((task) => ["queued", "preparing", "running", "exporting"].includes(task.status));
   const completedTasks = tasks.filter((task) => task.status === "succeeded");
+  const cityPresetPaths = useMemo(
+    () => presetPaths.filter((path) => !selectedCityId || path.city_model_id === selectedCityId),
+    [presetPaths, selectedCityId]
+  );
 
   const sceneCity = scenarioSnapshot?.cityModel ?? cityGeometry;
   const sceneBase = scenarioSnapshot?.baseStationSet ?? basePayload;
@@ -210,6 +214,12 @@ function App() {
     }
     void loadPresetPath(selectedPathId);
   }, [selectedPathId]);
+
+  useEffect(() => {
+    if (selectedPathId && !cityPresetPaths.some((path) => path.id === selectedPathId)) {
+      setSelectedPathId("");
+    }
+  }, [cityPresetPaths, selectedPathId]);
 
   useEffect(() => {
     if (!selectedScenarioId) {
@@ -278,6 +288,8 @@ function App() {
       setBaseSets(stationSets);
       if (stationSets.length && !stationSets.some((item) => item.id === selectedBaseSetId)) {
         setSelectedBaseSetId(stationSets[0].id);
+      } else if (!stationSets.length) {
+        setSelectedBaseSetId("");
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "城市模型读取失败");
@@ -393,14 +405,13 @@ function App() {
   }
 
   async function handleSavePath() {
-    if (!selectedCityId || !selectedBaseSetId) {
-      setError("请先选择城市模型和基站集合");
+    if (!selectedCityId) {
+      setError("请先选择城市模型");
       return;
     }
     await runAction(async () => {
       const created = await createPresetPath({
         cityModelId: selectedCityId,
-        baseStationSetId: selectedBaseSetId,
         name: `预设路径 ${new Date().toLocaleTimeString()}`,
         points: draftPoints
       });
@@ -410,14 +421,13 @@ function App() {
   }
 
   async function handleImportPath() {
-    if (!selectedCityId || !selectedBaseSetId) {
-      setError("请先选择城市模型和基站集合");
+    if (!selectedCityId) {
+      setError("请先选择城市模型");
       return;
     }
     await runAction(async () => {
       const created = await importPresetPath({
         cityModelId: selectedCityId,
-        baseStationSetId: selectedBaseSetId,
         name: `导入路径 ${new Date().toLocaleTimeString()}`,
         sourceFormat: pathImport.format,
         content: pathImport.content
@@ -522,7 +532,7 @@ function App() {
             specs={pathSpecs}
             cityModels={cityModels}
             baseSets={baseSets}
-            paths={presetPaths}
+            paths={cityPresetPaths}
             selectedCityId={selectedCityId}
             selectedBaseSetId={selectedBaseSetId}
             selectedPathId={selectedPathId}
@@ -543,7 +553,7 @@ function App() {
           <ScenarioView
             cityModels={cityModels}
             baseSets={baseSets}
-            paths={presetPaths}
+            paths={cityPresetPaths}
             scenarios={scenarios}
             selectedCityId={selectedCityId}
             selectedBaseSetId={selectedBaseSetId}
@@ -685,7 +695,6 @@ function App() {
                       id: "draft",
                       name: "draft",
                       cityModelId: selectedCityId,
-                      baseStationSetId: selectedBaseSetId,
                       points: draftPoints.map((point, index) => ({ index, ...point }))
                     }
                   : scenePath
@@ -777,12 +786,12 @@ function BaseStationView(props: {
   selectedCityId: string;
   records: ResourceRecord[];
   selectedId: string;
-  params: { bs_per_km2: number; height: number; powerDbm: number; seed: number };
+  params: { bs_per_km2: number; roof_offset_m: number; powerDbm: number; seed: number };
   importState: { format: string; content: string };
   isBusy: boolean;
   onCitySelect: (value: string) => void;
   onSelect: (value: string) => void;
-  onParamsChange: (value: { bs_per_km2: number; height: number; powerDbm: number; seed: number }) => void;
+  onParamsChange: (value: { bs_per_km2: number; roof_offset_m: number; powerDbm: number; seed: number }) => void;
   onImportChange: (value: { format: string; content: string }) => void;
   onGenerate: () => void;
   onImport: () => void;
@@ -799,7 +808,7 @@ function BaseStationView(props: {
       <ResourcePicker label="所属城市" records={props.cityModels} selectedId={props.selectedCityId} onSelect={props.onCitySelect} />
       <div className="field-grid">
         <NumberField label="基站密度" value={props.params.bs_per_km2} step={1} onChange={(bs_per_km2) => props.onParamsChange({ ...props.params, bs_per_km2 })} />
-        <NumberField label="基站高度" value={props.params.height} step={1} onChange={(height) => props.onParamsChange({ ...props.params, height })} />
+        <NumberField label="楼顶加高" value={props.params.roof_offset_m} step={1} onChange={(roof_offset_m) => props.onParamsChange({ ...props.params, roof_offset_m })} />
         <NumberField label="发射功率" value={props.params.powerDbm} step={1} onChange={(powerDbm) => props.onParamsChange({ ...props.params, powerDbm })} />
         <NumberField label="随机种子" value={props.params.seed} step={1} onChange={(seed) => props.onParamsChange({ ...props.params, seed })} />
       </div>
@@ -844,7 +853,7 @@ function PathView(props: {
         </button>
       </div>
       <ResourcePicker label="所属城市" records={props.cityModels} selectedId={props.selectedCityId} onSelect={props.onCitySelect} />
-      <ResourcePicker label="基站集合" records={props.baseSets} selectedId={props.selectedBaseSetId} onSelect={props.onBaseSelect} />
+      <ResourcePicker label="预览基站集合" records={props.baseSets} selectedId={props.selectedBaseSetId} onSelect={props.onBaseSelect} />
       <ResourcePicker label="已保存路径" records={props.paths} selectedId={props.selectedPathId} onSelect={props.onPathSelect} />
       <div className="point-table">
         {props.points.map((point, index) => (

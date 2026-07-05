@@ -42,17 +42,19 @@ React 多 Tab 前端
 ```text
 城市建模
   -> 基站管理
-    -> 预设路径
-      -> 场景组合
-        -> 规划任务
-          -> 任务队列 / 结果中心
+  -> 预设路径
+基站管理 + 预设路径
+  -> 场景组合
+    -> 规划任务
+      -> 任务队列 / 结果中心
 ```
 
 其中：
 
 - 城市建模是基站管理的基础。
 - 基站管理必须绑定一个城市模型。
-- 预设路径必须基于一个城市模型和一个基站集合。
+- 预设路径只绑定一个城市模型，不在资源层绑定基站集合。
+- 使用预设路径创建场景或规划任务时，必须同时选择基站集合，并校验城市、基站集合、预设路径属于同一个城市模型。
 - 场景组合必须固化城市、基站、预设路径三者的快照。
 
 ## 3. 方案对比
@@ -276,7 +278,7 @@ JSON: baseStations: [{id,x,y,z,powerDbm}]
 - 必填字段：`id,x,y,z`。
 - 可选字段：`powerDbm,frequency,coverageRadius`。
 - 坐标系必须与所选城市模型一致。
-- 如果缺少 `z`，是否使用默认基站高度。
+- 导入基站要求提供 `z`，因为导入数据被视为外部系统已经计算好的绝对三维坐标。
 - 模板下载入口。
 
 基站生成第一阶段支持 Matlab 中基于基站密度的 K-means 分布算法。设计上将其视为基站生成算法，而不是写死在页面里：
@@ -285,7 +287,7 @@ JSON: baseStations: [{id,x,y,z,powerDbm}]
 用户选择城市模型
   -> 选择“算法生成”
   -> 选择生成算法：MatlabDensityKMeansBaseStations
-  -> 输入 bs_per_km2 / 发射功率 / 基站高度 / 随机种子
+  -> 输入 bs_per_km2 / 发射功率 / 楼顶加高 / 随机种子
   -> 后端根据城市模型范围与建筑/可用区域生成候选点
   -> Matlab K-means 算法生成基站位置
   -> 后端保存 base_station_set
@@ -301,11 +303,13 @@ JSON: baseStations: [{id,x,y,z,powerDbm}]
   "requires": ["cityModel"],
   "parameters": [
     {"key": "bs_per_km2", "type": "number"},
-    {"key": "height", "type": "number"},
+    {"key": "roof_offset_m", "type": "number"},
     {"key": "powerDbm", "type": "number"}
   ]
 }
 ```
+
+自动生成基站时，基站不使用独立绝对高度，而是与原 Matlab 算法保持一致：选中建筑物后，在建筑物左下角和右上角部署基站，基站高度为 `建筑物高度 + roof_offset_m`，默认 `roof_offset_m = 5m`。
 
 内部格式：
 
@@ -335,16 +339,15 @@ JSON: baseStations: [{id,x,y,z,powerDbm}]
 - 拖拽调整路径点。
 - 增加、删除、重排路径点。
 - 实时显示折线路径。
-- 将路径与城市模型、基站集合组合使用。
+- 将路径与城市模型绑定，并在场景组合时与基站集合一起使用。
 
-预设路径必须基于城市建模和基站管理。用户创建路径前需要选择：
+预设路径必须基于城市建模。用户创建路径前需要选择：
 
 ```text
 城市模型
-基站集合
 ```
 
-这样前端在编辑路径时可以同时显示建筑物、基站和路径点，后端也能保证后续任务使用的是同一套基础资源。
+前端编辑路径时可以选择一个基站集合作为三维预览图层，但路径资源本身不保存 `baseStationSetId`。后端在创建场景组合时校验城市模型、基站集合和预设路径属于同一个城市模型，保证后续任务使用的是同一套基础资源。
 
 第一阶段建议支持格式：
 
@@ -608,7 +611,6 @@ updated_at TEXT NOT NULL
 id TEXT PRIMARY KEY
 name TEXT NOT NULL
 city_model_id TEXT NOT NULL
-base_station_set_id TEXT NOT NULL
 source_type TEXT NOT NULL
 source_file_path TEXT
 normalized_file_path TEXT NOT NULL
@@ -815,7 +817,6 @@ DELETE /api/preset-paths/{id}
 
 ```text
 city_model_id
-base_station_set_id
 ```
 
 ### 9.4 场景组合 API
@@ -927,7 +928,7 @@ backend/app/matlab/scripts/generate_base_stations.m
   "cityModelFile": "C:/.../resources/city_models/<id>/normalized.json",
   "parameters": {
     "bs_per_km2": 20,
-    "height": 40,
+    "roof_offset_m": 5,
     "powerDbm": 30,
     "seed": 1
   },
@@ -1101,7 +1102,7 @@ maxFE
 
 - 城市建模页：显示城市模型。
 - 基站管理页：显示城市 + 基站。
-- 预设路径页：显示城市 + 基站 + 可编辑路径。
+- 预设路径页：显示城市 + 可编辑路径，可选择基站集合作为预览图层。
 - 场景组合页：显示完整组合。
 - 结果中心页：显示完整组合 + 规划路径 + 切换点。
 
@@ -1128,7 +1129,7 @@ maxFE
 - 能导入基站集合。
 - 能基于城市模型和基站密度生成基站集合。
 - 能导入或创建预设路径。
-- 预设路径创建时必须绑定城市模型和基站集合。
+- 预设路径创建时必须绑定城市模型；创建场景组合时再指定基站集合。
 - 能保存场景组合。
 - 暂不要求 Matlab 使用导入场景。
 
@@ -1279,7 +1280,7 @@ maxFE
    Matlab 基站密度 K-means 算法生成
    ```
 
-6. 是否接受预设路径必须基于城市模型和基站集合。
+6. 是否接受预设路径只绑定城市模型，创建场景或任务时再指定基站集合并校验城市一致性。
 
 7. 是否接受所有文件导入入口都提供格式说明、示例和模板。
 

@@ -375,7 +375,7 @@ matlab -batch "addpath('<script_dir>'); run_planning_job('<platemo_root>', '<inp
 缺点：
 
 - Matlab 启动成本高。
-- 长任务运行期间 stdout/stderr 当前是进程结束后一次性落盘。
+- 长任务运行期间 stdout/stderr 通过 `subprocess.Popen()` 边运行边写入日志文件。
 - 不适合高频交互或大量并发。
 
 预留实现：
@@ -466,8 +466,8 @@ python -m unittest discover -s backend/tests -v
 结果：
 
 ```text
-12 tests
-11 passed
+22 tests
+21 passed
 1 skipped
 ```
 
@@ -664,12 +664,27 @@ scenarios
 - 城市模型 JSON/CSV 导入。
 - 城市模型基于 `alpha / beta / gamma` 生成。
 - 基站集合 JSON/CSV 导入。
-- 基站集合基于城市模型和 `bs_per_km2` 生成。
+- 基站集合基于城市模型和 `bs_per_km2` 生成，自动生成时基站落在建筑物左下角/右上角，高度为 `building.height + roof_offset_m`，默认 `roof_offset_m = 5m`。
 - 预设路径 JSON/CSV 导入。
 - 预设路径手动点位保存。
 - 场景组合快照生成。
 - 文件导入格式说明 API。
 - 资源生成算法注册 API。
+
+资源归属关系当前固定为：
+
+```text
+CityModel 1 -> N BaseStationSet
+CityModel 1 -> N PresetPath
+Scenario 1 -> 1 CityModel + 1 BaseStationSet + 1 PresetPath
+```
+
+也就是说：
+
+- 每个基站集合只属于一个城市模型。
+- 每条预设路径只属于一个城市模型，不在资源层绑定基站集合。
+- 创建场景组合时才同时指定城市模型、基站集合、预设路径，并校验基站集合和预设路径都属于所选城市模型。
+- `preset_paths` 表不再包含 `base_station_set_id`；启动时会迁移旧表结构，保留已有路径资源的城市、文件和点数信息。
 
 ### 17.2 新增资源 API
 
