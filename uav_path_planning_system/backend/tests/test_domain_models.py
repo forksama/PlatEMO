@@ -27,7 +27,7 @@ class DomainModelTests(unittest.TestCase):
     def test_job_status_values_are_stable_for_frontend(self) -> None:
         self.assertEqual(
             [status.value for status in JobStatus],
-            ["queued", "running", "succeeded", "failed", "cancelled"],
+            ["queued", "preparing", "running", "exporting", "succeeded", "failed", "cancelled"],
         )
 
     def test_rejects_invalid_switch_method(self) -> None:

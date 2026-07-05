@@ -127,6 +127,7 @@ classdef UAVPathPlanning < PROBLEM
             userUpper = obj.upper;
             presetAltitude = NaN;
             altitudeBounds = [];
+            scenarioDataPath = '';
             
             % 获取参数（使用ParameterSet获取，如果obj.parameter被指定则使用，否则使用默认值）
             % 参数格式：{bsPerKm2, velocity, TTT, switchThreshold, obstacleMethod, P_tx, switchMethod, lookaheadDistance, lookaheadHysteresisRange, lookaheadSafetyMargin}
@@ -205,6 +206,9 @@ classdef UAVPathPlanning < PROBLEM
                     if length(params) >= 12
                         altitudeBounds = params{12};
                     end
+                    if length(params) >= 13 && ~isempty(params{13})
+                        scenarioDataPath = params{13};
+                    end
                 else
                     bsPerKm2 = 10;  % 默认每平方公里10个基站
                     velocity = 10;
@@ -247,7 +251,13 @@ classdef UAVPathPlanning < PROBLEM
             file = sprintf('UAVPathPlanning-%d-%d.mat', obstacleMethod, bsPerKm2);
             file = fullfile(fileparts(mfilename('fullpath')), file);
             
-            if exist(file, 'file') == 2
+            if ~isempty(scenarioDataPath) && exist(char(scenarioDataPath), 'file') == 2
+                [presetPath, baseStations, obstacles] = obj.loadExternalScenario(char(scenarioDataPath));
+                obstacleGridSize = obj.obstacleGridSize;
+                xyBound = obj.xyBound;
+                buildingSpacing = obj.buildingSpacing;
+                mapOrigin = obj.mapOrigin;
+            elseif exist(file, 'file') == 2
                 % 加载数据文件（尝试加载obstacleGridSize、xyBound、buildingSpacing、mapOrigin，如果不存在也不会报错）
                 try
                     load(file, 'presetPath', 'baseStations', 'obstacles', 'obstacleGridSize', 'xyBound', 'buildingSpacing', 'mapOrigin');
@@ -1665,6 +1675,118 @@ classdef UAVPathPlanning < PROBLEM
             
             % 生成预设路径
             presetPath = obj.generatePresetPath(method);
+        end
+
+        %% 从系统场景快照加载预设路径、基站和障碍物
+        function [presetPath, baseStations, obstacles] = loadExternalScenario(obj, scenarioDataPath)
+            scenario = jsondecode(fileread(scenarioDataPath));
+
+            if ~isfield(scenario, 'presetPath') || isempty(scenario.presetPath)
+                error('UAVPathPlanning:InvalidScenario', 'External scenario missing presetPath.');
+            end
+            if ~isfield(scenario, 'baseStations') || isempty(scenario.baseStations)
+                error('UAVPathPlanning:InvalidScenario', 'External scenario missing baseStations.');
+            end
+
+            presetPath = obj.ensureMatrix3(scenario.presetPath, 'presetPath');
+            baseStations = obj.ensureMatrix3(scenario.baseStations, 'baseStations');
+
+            if isfield(scenario, 'grid') && ~isempty(scenario.grid)
+                grid = scenario.grid;
+                if isfield(grid, 'gridX') && ~isempty(grid.gridX)
+                    gridX = max(1, round(double(grid.gridX)));
+                else
+                    gridX = max(1, ceil(sqrt(numel(scenario.obstacles))));
+                end
+                if isfield(grid, 'gridY') && ~isempty(grid.gridY)
+                    gridY = max(1, round(double(grid.gridY)));
+                else
+                    gridY = max(1, ceil(numel(scenario.obstacles) / gridX));
+                end
+                if isfield(grid, 'buildingSpacing') && ~isempty(grid.buildingSpacing)
+                    obj.buildingSpacing = double(grid.buildingSpacing);
+                else
+                    obj.buildingSpacing = obj.inferExternalBuildingSpacing(scenario, gridX, gridY);
+                end
+                if isfield(grid, 'mapOrigin') && ~isempty(grid.mapOrigin)
+                    obj.mapOrigin = double(grid.mapOrigin(:))';
+                else
+                    obj.mapOrigin = obj.inferExternalMapOrigin(scenario);
+                end
+            else
+                gridX = max(1, ceil(sqrt(numel(scenario.obstacles))));
+                gridY = max(1, ceil(numel(scenario.obstacles) / gridX));
+                obj.buildingSpacing = obj.inferExternalBuildingSpacing(scenario, gridX, gridY);
+                obj.mapOrigin = obj.inferExternalMapOrigin(scenario);
+            end
+
+            obj.obstacleGridSize = [gridX, gridY];
+            obstacles = zeros(gridX, gridY, 5);
+            if isfield(scenario, 'obstacles') && ~isempty(scenario.obstacles)
+                obstacleList = scenario.obstacles;
+                for i = 1:numel(obstacleList)
+                    item = obstacleList(i);
+                    obs = [
+                        obj.readScenarioNumber(item, 'xMin', 0), ...
+                        obj.readScenarioNumber(item, 'yMin', 0), ...
+                        obj.readScenarioNumber(item, 'xMax', 0), ...
+                        obj.readScenarioNumber(item, 'yMax', 0), ...
+                        obj.readScenarioNumber(item, 'height', 0)
+                    ];
+                    if isfield(item, 'gridX') && ~isempty(item.gridX) && ...
+                            isfield(item, 'gridY') && ~isempty(item.gridY)
+                        xIdx = max(1, min(gridX, round(double(item.gridX))));
+                        yIdx = max(1, min(gridY, round(double(item.gridY))));
+                    else
+                        xIdx = ceil((mean(obs([1, 3])) - obj.mapOrigin(1)) / obj.buildingSpacing);
+                        yIdx = ceil((mean(obs([2, 4])) - obj.mapOrigin(2)) / obj.buildingSpacing);
+                        xIdx = max(1, min(gridX, xIdx));
+                        yIdx = max(1, min(gridY, yIdx));
+                    end
+                    obstacles(xIdx, yIdx, :) = obs;
+                end
+            end
+
+            obj.xyBound = [];
+            fprintf('已加载外部UAV路径规划场景：%s\n', scenarioDataPath);
+            fprintf('  预设路径点：%d，基站：%d，建筑网格：%d x %d\n', ...
+                size(presetPath, 1), size(baseStations, 1), gridX, gridY);
+        end
+
+        function matrix = ensureMatrix3(obj, value, fieldName)
+            matrix = double(value);
+            if size(matrix, 2) ~= 3 && size(matrix, 1) == 3
+                matrix = matrix';
+            end
+            if size(matrix, 2) ~= 3
+                error('UAVPathPlanning:InvalidScenario', '%s must be an N x 3 matrix.', fieldName);
+            end
+        end
+
+        function value = readScenarioNumber(obj, item, fieldName, defaultValue)
+            value = defaultValue;
+            if isfield(item, fieldName) && ~isempty(item.(fieldName))
+                value = double(item.(fieldName));
+            end
+        end
+
+        function spacing = inferExternalBuildingSpacing(obj, scenario, gridX, gridY)
+            if isfield(scenario, 'bounds') && ~isempty(scenario.bounds)
+                bounds = scenario.bounds;
+                width = double(bounds.maxX) - double(bounds.minX);
+                height = double(bounds.maxY) - double(bounds.minY);
+                spacing = max([width / max(1, gridX), height / max(1, gridY), 1]);
+            else
+                spacing = 1;
+            end
+        end
+
+        function origin = inferExternalMapOrigin(obj, scenario)
+            if isfield(scenario, 'bounds') && ~isempty(scenario.bounds)
+                origin = [double(scenario.bounds.minX), double(scenario.bounds.minY)];
+            else
+                origin = [0, 0];
+            end
         end
         
         %% 生成预设路径

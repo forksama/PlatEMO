@@ -1,12 +1,14 @@
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobStatus(str, Enum):
     queued = "queued"
+    preparing = "preparing"
     running = "running"
+    exporting = "exporting"
     succeeded = "succeeded"
     failed = "failed"
     cancelled = "cancelled"
@@ -40,7 +42,19 @@ class AlgorithmConfig(BaseModel):
     uniform_point_multiplier: int = Field(default=3, ge=1)
 
 
+class PlanningScenarioConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    scenario_id: str | None = Field(default=None, alias="scenarioId")
+    snapshot_file: str | None = Field(default=None, alias="snapshotFile")
+    matlab_scenario_file: str | None = Field(default=None, alias="matlabScenarioFile")
+
+
 class PlanningConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    scenario: PlanningScenarioConfig = Field(default_factory=PlanningScenarioConfig)
+    algorithm_key: str = Field(default="DCMOCPSO", alias="algorithmKey")
     problem: ProblemConfig = Field(default_factory=ProblemConfig)
     algorithm: AlgorithmConfig = Field(default_factory=AlgorithmConfig)
 

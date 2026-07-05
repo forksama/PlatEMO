@@ -12,6 +12,21 @@ function run_planning_job(platemoRoot, inputJsonPath, artifactDir)
     addpath(genpath(platemoRoot));
     configText = fileread(inputJsonPath);
     config = jsondecode(configText);
+    writeProgress(artifactDir, 'loading_scenario', 8, 'Loaded task input.');
+
+    presetAltitude = NaN;
+    if isfield(config.problem, 'preset_altitude_m') && ~isempty(config.problem.preset_altitude_m)
+        presetAltitude = config.problem.preset_altitude_m;
+    end
+    altitudeBounds = [];
+    if isfield(config.problem, 'altitude_bounds_m') && ~isempty(config.problem.altitude_bounds_m)
+        altitudeBounds = config.problem.altitude_bounds_m;
+    end
+    scenarioDataPath = '';
+    if isfield(config, 'scenario') && isfield(config.scenario, 'matlabScenarioFile') && ...
+            ~isempty(config.scenario.matlabScenarioFile)
+        scenarioDataPath = char(config.scenario.matlabScenarioFile);
+    end
 
     problemParameter = {
         config.problem.bs_per_km2, ...
@@ -23,7 +38,10 @@ function run_planning_job(platemoRoot, inputJsonPath, artifactDir)
         config.problem.switch_method, ...
         config.problem.lookahead_distance_m, ...
         config.problem.lookahead_hysteresis_range_db, ...
-        config.problem.lookahead_safety_margin_db
+        config.problem.lookahead_safety_margin_db, ...
+        presetAltitude, ...
+        altitudeBounds, ...
+        scenarioDataPath
     };
 
     algorithmParameter = {
@@ -37,12 +55,15 @@ function run_planning_job(platemoRoot, inputJsonPath, artifactDir)
         config.algorithm.uniform_point_multiplier
     };
 
+    writeProgress(artifactDir, 'initializing_problem', 12, 'Initializing UAVPathPlanning.');
     Problem = UAVPathPlanning( ...
         'N', config.algorithm.population_size, ...
         'maxFE', config.algorithm.max_fe, ...
         'parameter', problemParameter);
+    writeProgress(artifactDir, 'initializing_algorithm', 18, 'Initializing DCMOCPSO.');
     Algorithm = DCMOCPSO('parameter', algorithmParameter, 'outputFcn', @(~,~)[]);
 
+    writeProgress(artifactDir, 'running_algorithm', 25, 'Running DCMOCPSO.');
     tic;
     Algorithm.Solve(Problem);
     runtimeSeconds = toc;
@@ -62,6 +83,7 @@ function run_planning_job(platemoRoot, inputJsonPath, artifactDir)
     result.solutions = exportSolutions(Problem, decs);
     result.scenario = exportScenario(Problem, config);
 
+    writeProgress(artifactDir, 'exporting_result', 92, 'Writing result artifacts.');
     resultPath = fullfile(artifactDir, 'result.json');
     fid = fopen(resultPath, 'w');
     fwrite(fid, jsonencode(result), 'char');
@@ -69,6 +91,7 @@ function run_planning_job(platemoRoot, inputJsonPath, artifactDir)
 
     matPath = fullfile(artifactDir, 'result.mat');
     save(matPath, 'config', 'decs', 'objs', 'cons', 'result');
+    writeProgress(artifactDir, 'finished', 100, 'Planning job finished.');
 end
 
 function metrics = summarizePopulation(runtimeSeconds, actualFE, decs, objs)
@@ -131,6 +154,22 @@ function scenario = exportScenario(Problem, config)
     scenario.baseStations = [];
     scenario.obstacles = [];
 
+    scenarioDataPath = '';
+    if isfield(config, 'scenario') && isfield(config.scenario, 'matlabScenarioFile') && ...
+            ~isempty(config.scenario.matlabScenarioFile)
+        scenarioDataPath = char(config.scenario.matlabScenarioFile);
+    end
+    if ~isempty(scenarioDataPath) && exist(scenarioDataPath, 'file') == 2
+        external = jsondecode(fileread(scenarioDataPath));
+        if isfield(external, 'baseStations')
+            scenario.baseStations = external.baseStations;
+        end
+        if isfield(external, 'obstacles')
+            scenario.obstacles = external.obstacles;
+        end
+        return;
+    end
+
     scenarioFile = fullfile( ...
         fileparts(which('UAVPathPlanning')), ...
         sprintf('UAVPathPlanning-%d-%d.mat', ...
@@ -144,6 +183,21 @@ function scenario = exportScenario(Problem, config)
             scenario.obstacles = flattenObstacles(loaded.obstacles);
         end
     end
+end
+
+function writeProgress(artifactDir, stage, percent, message)
+    progress = struct();
+    progress.stage = stage;
+    progress.percent = percent;
+    progress.message = message;
+    progress.updatedAt = char(datetime('now', 'TimeZone', 'UTC', 'Format', 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z'''));
+    progressPath = fullfile(artifactDir, 'progress.json');
+    fid = fopen(progressPath, 'w');
+    if fid < 0
+        return;
+    end
+    fwrite(fid, jsonencode(progress), 'char');
+    fclose(fid);
 end
 
 function flattened = flattenObstacles(obstacles)
