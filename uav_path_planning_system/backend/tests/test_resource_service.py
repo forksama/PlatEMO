@@ -91,7 +91,7 @@ class ResourceServiceTests(unittest.TestCase):
                 city_model_id=city.id,
                 name="stations",
                 algorithm_key="MatlabDensityKMeansBaseStations",
-                parameters={"bs_per_km2": 2, "height": 45, "roof_offset_m": 7, "powerDbm": 32, "seed": 2},
+                parameters={"bs_per_km2": 2, "height": 45, "roof_offset_m": 7, "seed": 2},
             )
 
             payload = service.get_base_station_payload(stations.id)
@@ -103,7 +103,7 @@ class ResourceServiceTests(unittest.TestCase):
                 {(station["x"], station["y"]) for station in payload["baseStations"]},
                 {(10.0, 20.0), (40.0, 60.0)},
             )
-            self.assertEqual(payload["baseStations"][0]["powerDbm"], 32)
+            self.assertNotIn("powerDbm", payload["baseStations"][0])
 
     def test_base_station_generation_algorithm_exposes_roof_offset_not_absolute_height(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -114,6 +114,7 @@ class ResourceServiceTests(unittest.TestCase):
             parameter_keys = {parameter["key"] for parameter in algorithm["parameters"]}
             self.assertIn("roof_offset_m", parameter_keys)
             self.assertNotIn("height", parameter_keys)
+            self.assertNotIn("powerDbm", parameter_keys)
 
     def test_preset_path_and_scenario_snapshot_keep_resource_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

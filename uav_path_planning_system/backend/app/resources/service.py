@@ -93,7 +93,6 @@ class ResourceService:
                 "parameters": [
                     {"key": "bs_per_km2", "type": "number", "required": True, "default": 20},
                     {"key": "roof_offset_m", "type": "number", "required": False, "default": 5},
-                    {"key": "powerDbm", "type": "number", "required": False, "default": 30},
                     {"key": "seed", "type": "integer", "required": False, "default": 1},
                 ],
             },
@@ -612,7 +611,6 @@ class ResourceService:
         parameters: dict[str, Any],
     ) -> dict[str, Any]:
         bs_per_km2 = float(parameters.get("bs_per_km2", parameters.get("bsPerKm2", 20)))
-        power_dbm = float(parameters.get("powerDbm", parameters.get("power_dbm", 30)))
         seed = int(parameters.get("seed", 1))
         bounds = city["bounds"]
         area_km2 = ((bounds["maxX"] - bounds["minX"]) * (bounds["maxY"] - bounds["minY"])) / 1_000_000
@@ -630,7 +628,6 @@ class ResourceService:
                         "x": float(building[x_key]),
                         "y": float(building[y_key]),
                         "z": z_value,
-                        "powerDbm": power_dbm,
                         "buildingId": building["id"],
                     }
                 )

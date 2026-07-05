@@ -260,7 +260,7 @@ Three.js 中可以把建筑物 footprint 拉伸成三维 mesh。
 - 基于已选择城市模型生成基站分布。
 - 查看基站集合列表。
 - 在三维图中显示基站位置和高度。
-- 管理基站参数，例如发射功率、频段、覆盖半径、说明。
+- 管理基站元数据，例如频段、覆盖半径、说明。
 - 将基站集合与城市模型建立关联。
 
 基站管理必须基于城市建模。用户创建或导入基站集合时，需要先选择一个城市模型；后端保存 `cityModelId`，三维视图也以该城市模型为底图显示基站。
@@ -287,7 +287,7 @@ JSON: baseStations: [{id,x,y,z,powerDbm}]
 用户选择城市模型
   -> 选择“算法生成”
   -> 选择生成算法：MatlabDensityKMeansBaseStations
-  -> 输入 bs_per_km2 / 发射功率 / 楼顶加高 / 随机种子
+  -> 输入 bs_per_km2 / 楼顶加高 / 随机种子
   -> 后端根据城市模型范围与建筑/可用区域生成候选点
   -> Matlab K-means 算法生成基站位置
   -> 后端保存 base_station_set
@@ -304,7 +304,7 @@ JSON: baseStations: [{id,x,y,z,powerDbm}]
   "parameters": [
     {"key": "bs_per_km2", "type": "number"},
     {"key": "roof_offset_m", "type": "number"},
-    {"key": "powerDbm", "type": "number"}
+    {"key": "seed", "type": "integer"}
   ]
 }
 ```
@@ -323,8 +323,7 @@ JSON: baseStations: [{id,x,y,z,powerDbm}]
       "id": "bs_1",
       "x": 100,
       "y": 200,
-      "z": 40,
-      "powerDbm": 30
+      "z": 40
     }
   ]
 }
@@ -929,7 +928,6 @@ backend/app/matlab/scripts/generate_base_stations.m
   "parameters": {
     "bs_per_km2": 20,
     "roof_offset_m": 5,
-    "powerDbm": 30,
     "seed": 1
   },
   "outputPath": "C:/.../resources/base_station_sets/<id>/normalized.json"

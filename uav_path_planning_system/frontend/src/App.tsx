@@ -13,6 +13,7 @@ import {
   Route,
   Save,
   Settings,
+  Trash2,
   Upload
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -157,7 +158,7 @@ function App() {
   const [baseImport, setBaseImport] = useState({ format: "json", content: "" });
   const [pathImport, setPathImport] = useState({ format: "json", content: "" });
   const [cityParams, setCityParams] = useState({ alpha: 0.3265, beta: 204.08, gamma: 40, seed: 1 });
-  const [baseParams, setBaseParams] = useState({ bs_per_km2: 20, roof_offset_m: 5, powerDbm: 30, seed: 1 });
+  const [baseParams, setBaseParams] = useState({ bs_per_km2: 20, roof_offset_m: 5, seed: 1 });
   const [isBusy, setIsBusy] = useState(false);
 
   const cityAlgorithm = generationAlgorithms.find((item) => item.targetType === "city_model");
@@ -786,12 +787,12 @@ function BaseStationView(props: {
   selectedCityId: string;
   records: ResourceRecord[];
   selectedId: string;
-  params: { bs_per_km2: number; roof_offset_m: number; powerDbm: number; seed: number };
+  params: { bs_per_km2: number; roof_offset_m: number; seed: number };
   importState: { format: string; content: string };
   isBusy: boolean;
   onCitySelect: (value: string) => void;
   onSelect: (value: string) => void;
-  onParamsChange: (value: { bs_per_km2: number; roof_offset_m: number; powerDbm: number; seed: number }) => void;
+  onParamsChange: (value: { bs_per_km2: number; roof_offset_m: number; seed: number }) => void;
   onImportChange: (value: { format: string; content: string }) => void;
   onGenerate: () => void;
   onImport: () => void;
@@ -809,7 +810,6 @@ function BaseStationView(props: {
       <div className="field-grid">
         <NumberField label="基站密度" value={props.params.bs_per_km2} step={1} onChange={(bs_per_km2) => props.onParamsChange({ ...props.params, bs_per_km2 })} />
         <NumberField label="楼顶加高" value={props.params.roof_offset_m} step={1} onChange={(roof_offset_m) => props.onParamsChange({ ...props.params, roof_offset_m })} />
-        <NumberField label="发射功率" value={props.params.powerDbm} step={1} onChange={(powerDbm) => props.onParamsChange({ ...props.params, powerDbm })} />
         <NumberField label="随机种子" value={props.params.seed} step={1} onChange={(seed) => props.onParamsChange({ ...props.params, seed })} />
       </div>
       <ResourcePicker label="基站集合" records={props.records} selectedId={props.selectedId} onSelect={props.onSelect} />
@@ -857,11 +857,14 @@ function PathView(props: {
       <ResourcePicker label="已保存路径" records={props.paths} selectedId={props.selectedPathId} onSelect={props.onPathSelect} />
       <div className="point-table">
         {props.points.map((point, index) => (
-          <div className="point-row" key={`${index}-${point.x}-${point.y}-${point.z}`}>
+          <div className="point-row" key={index}>
             <span>{index + 1}</span>
             <input value={point.x} type="number" onChange={(event) => updatePoint(props, index, "x", event.target.value)} />
             <input value={point.y} type="number" onChange={(event) => updatePoint(props, index, "y", event.target.value)} />
             <input value={point.z} type="number" onChange={(event) => updatePoint(props, index, "z", event.target.value)} />
+            <button className="icon-button" type="button" title="删除路径点" onClick={() => removePoint(props, index)}>
+              <Trash2 size={16} />
+            </button>
           </div>
         ))}
       </div>
@@ -890,6 +893,13 @@ function updatePoint(
   value: string
 ) {
   props.onPointsChange(props.points.map((point, itemIndex) => (itemIndex === index ? { ...point, [field]: Number(value) } : point)));
+}
+
+function removePoint(
+  props: { points: Array<{ x: number; y: number; z: number }>; onPointsChange: (value: Array<{ x: number; y: number; z: number }>) => void },
+  index: number
+) {
+  props.onPointsChange(props.points.filter((_, itemIndex) => itemIndex !== index));
 }
 
 function ScenarioView(props: {

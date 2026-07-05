@@ -120,9 +120,6 @@ export function ThreeScene({
 
     const stationMaterial = new THREE.MeshStandardMaterial({ color: 0x1976a3, emissive: 0x05212e });
     baseStations?.baseStations.forEach((station) => {
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.5, Math.max(15, station.z), 12), stationMaterial);
-      mast.position.set(station.x, Math.max(7.5, station.z / 2), station.y);
-      scene.add(mast);
       const cap = new THREE.Mesh(new THREE.SphereGeometry(10, 18, 18), stationMaterial);
       cap.position.set(station.x, station.z, station.y);
       scene.add(cap);
@@ -156,7 +153,8 @@ export function ThreeScene({
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    const clickHandler = (event: MouseEvent) => {
+    let pointerDown: { x: number; y: number; button: number; moved: boolean } | null = null;
+    const addPointFromEvent = (event: PointerEvent) => {
       if (!editPath || !onAddPoint) {
         return;
       }
@@ -174,7 +172,37 @@ export function ThreeScene({
         z: presetPath?.points[presetPath.points.length - 1]?.z ?? 50
       });
     };
-    renderer.domElement.addEventListener("click", clickHandler);
+    const pointerDownHandler = (event: PointerEvent) => {
+      if (!editPath || event.button !== 0) {
+        pointerDown = null;
+        return;
+      }
+      pointerDown = { x: event.clientX, y: event.clientY, button: event.button, moved: false };
+    };
+    const pointerMoveHandler = (event: PointerEvent) => {
+      if (!pointerDown) {
+        return;
+      }
+      const distance = Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y);
+      if (distance > 4) {
+        pointerDown.moved = true;
+      }
+    };
+    const pointerUpHandler = (event: PointerEvent) => {
+      if (!pointerDown || pointerDown.button !== 0 || pointerDown.moved) {
+        pointerDown = null;
+        return;
+      }
+      addPointFromEvent(event);
+      pointerDown = null;
+    };
+    const contextMenuHandler = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+    renderer.domElement.addEventListener("pointerdown", pointerDownHandler);
+    renderer.domElement.addEventListener("pointermove", pointerMoveHandler);
+    renderer.domElement.addEventListener("pointerup", pointerUpHandler);
+    renderer.domElement.addEventListener("contextmenu", contextMenuHandler);
 
     let frame = 0;
     const animate = () => {
@@ -196,7 +224,10 @@ export function ThreeScene({
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", resize);
-      renderer.domElement.removeEventListener("click", clickHandler);
+      renderer.domElement.removeEventListener("pointerdown", pointerDownHandler);
+      renderer.domElement.removeEventListener("pointermove", pointerMoveHandler);
+      renderer.domElement.removeEventListener("pointerup", pointerUpHandler);
+      renderer.domElement.removeEventListener("contextmenu", contextMenuHandler);
       controls.dispose();
       renderer.dispose();
       scene.traverse((object) => {
