@@ -51,6 +51,7 @@ export interface PlanningConfig {
 export interface TaskRecord {
   job_id: string;
   status: JobStatus;
+  config?: PlanningConfig;
   scenario_id?: string | null;
   algorithm_key?: string;
   created_at?: string;
@@ -192,7 +193,12 @@ export interface ResourceRecord {
   preset_path_id?: string;
   source_type?: string;
   source_format?: string | null;
+  source_file_path?: string | null;
   generation_algorithm_key?: string | null;
+  generation_params_json?: string | null;
+  normalized_file_path?: string;
+  bounds_json?: string;
+  metadata_json?: string;
   station_count?: number;
   point_count?: number;
   snapshot_file_path?: string;

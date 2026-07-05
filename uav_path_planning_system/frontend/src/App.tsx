@@ -17,7 +17,7 @@ import {
   Trash2,
   Upload
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import {
   createPresetPath,
@@ -60,6 +60,7 @@ import {
   type TaskRecord
 } from "./api/client";
 import { ThreeScene } from "./components/ThreeScene";
+import { getSelectedObjectiveMetrics } from "./resultMetrics";
 
 type TabKey =
   | "overview"
@@ -129,6 +130,7 @@ function App() {
   const [config, setConfig] = useState<PlanningConfig>(defaultConfig);
   const [cityModels, setCityModels] = useState<ResourceRecord[]>([]);
   const [baseSets, setBaseSets] = useState<ResourceRecord[]>([]);
+  const [allBaseSets, setAllBaseSets] = useState<ResourceRecord[]>([]);
   const [presetPaths, setPresetPaths] = useState<ResourceRecord[]>([]);
   const [scenarios, setScenarios] = useState<ResourceRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
@@ -188,6 +190,17 @@ function App() {
     [draftPoints, selectedCityId]
   );
   const displayedScenePath = activeTab === "path" ? draftPath : scenePath;
+  const displayedPathPointCount =
+    displayedScenePath?.points.length ?? (activeTab === "results" ? sceneResult.scenario.presetPath.length : 0);
+  const resourceLookup = useMemo(
+    () => ({
+      cityModels,
+      baseSets: allBaseSets,
+      paths: presetPaths,
+      scenarios
+    }),
+    [allBaseSets, cityModels, presetPaths, scenarios]
+  );
 
   useEffect(() => {
     void loadBootstrap();
@@ -273,8 +286,14 @@ function App() {
   }
 
   async function refreshResources() {
-    const [cities, paths, sceneRecords] = await Promise.all([listCityModels(), listPresetPaths(), listScenarios()]);
+    const [cities, stationSets, paths, sceneRecords] = await Promise.all([
+      listCityModels(),
+      listBaseStationSets(),
+      listPresetPaths(),
+      listScenarios()
+    ]);
     setCityModels(cities);
+    setAllBaseSets(stationSets);
     setPresetPaths(paths);
     setScenarios(sceneRecords);
   }
@@ -292,9 +311,14 @@ function App() {
 
   async function loadCity(cityId: string) {
     try {
-      const [geometry, stationSets] = await Promise.all([getCityGeometry(cityId), listBaseStationSets(cityId)]);
+      const [geometry, stationSets, allStationSets] = await Promise.all([
+        getCityGeometry(cityId),
+        listBaseStationSets(cityId),
+        listBaseStationSets()
+      ]);
       setCityGeometry(geometry);
       setBaseSets(stationSets);
+      setAllBaseSets(allStationSets);
       if (stationSets.length && !stationSets.some((item) => item.id === selectedBaseSetId)) {
         setSelectedBaseSetId(stationSets[0].id);
       } else if (!stationSets.length) {
@@ -506,6 +530,7 @@ function App() {
             specs={citySpecs}
             records={cityModels}
             selectedId={selectedCityId}
+            lookup={resourceLookup}
             params={cityParams}
             importState={cityImport}
             isBusy={isBusy}
@@ -524,6 +549,7 @@ function App() {
             selectedCityId={selectedCityId}
             records={baseSets}
             selectedId={selectedBaseSetId}
+            lookup={resourceLookup}
             params={baseParams}
             importState={baseImport}
             isBusy={isBusy}
@@ -546,6 +572,7 @@ function App() {
             selectedBaseSetId={selectedBaseSetId}
             selectedPathId={selectedPathId}
             points={draftPoints}
+            lookup={resourceLookup}
             importState={pathImport}
             isBusy={isBusy}
             onCitySelect={setSelectedCityId}
@@ -562,8 +589,10 @@ function App() {
           <ScenarioView
             cityModels={cityModels}
             baseSets={baseSets}
+            allBaseSets={allBaseSets}
             paths={cityPresetPaths}
             scenarios={scenarios}
+            lookup={resourceLookup}
             selectedCityId={selectedCityId}
             selectedBaseSetId={selectedBaseSetId}
             selectedPathId={selectedPathId}
@@ -595,6 +624,7 @@ function App() {
             selectedTaskId={selectedTaskId}
             progress={taskProgress}
             logs={taskLogs}
+            lookup={resourceLookup}
             onSelect={(jobId) => {
               setSelectedTaskId(jobId);
               void refreshTaskRuntime(jobId);
@@ -609,6 +639,7 @@ function App() {
             result={result}
             selectedTaskId={selectedTaskId}
             selectedSolution={selectedSolution}
+            lookup={resourceLookup}
             onLoadResult={(jobId) => void handleLoadResult(jobId)}
             onSelectSolution={setSelectedSolution}
           />
@@ -620,6 +651,7 @@ function App() {
     }
   }, [
     activeTab,
+    allBaseSets,
     baseImport,
     baseParams,
     baseSets,
@@ -637,6 +669,7 @@ function App() {
     pathSpecs,
     presetPaths,
     result,
+    resourceLookup,
     runningTasks.length,
     scenarios,
     selectedBaseSetId,
@@ -713,7 +746,7 @@ function App() {
                 <div className="scene-counts">
                   <span>{sceneCity?.buildings.length ?? 0} 建筑</span>
                   <span>{sceneBase?.baseStations.length ?? 0} 基站</span>
-                  <span>{displayedScenePath?.points.length ?? 0} 路径点</span>
+                  <span>{displayedPathPointCount} 路径点</span>
                 </div>
               </div>
             </div>
@@ -765,6 +798,7 @@ function CityView(props: {
   specs: ImportSpec[];
   records: ResourceRecord[];
   selectedId: string;
+  lookup: ResourceLookup;
   params: { alpha: number; beta: number; gamma: number; seed: number };
   importState: { format: string; content: string };
   isBusy: boolean;
@@ -790,6 +824,7 @@ function CityView(props: {
         <NumberField label="随机种子" value={props.params.seed} step={1} onChange={(seed) => props.onParamsChange({ ...props.params, seed })} />
       </div>
       <ResourcePicker label="城市模型" records={props.records} selectedId={props.selectedId} onSelect={props.onSelect} />
+      <ResourceDetailPanel record={props.records.find((record) => record.id === props.selectedId) ?? null} lookup={props.lookup} />
       <ImportBox
         specs={props.specs}
         state={props.importState}
@@ -807,6 +842,7 @@ function BaseStationView(props: {
   selectedCityId: string;
   records: ResourceRecord[];
   selectedId: string;
+  lookup: ResourceLookup;
   params: { bs_per_km2: number; roof_offset_m: number; seed: number };
   importState: { format: string; content: string };
   isBusy: boolean;
@@ -833,6 +869,7 @@ function BaseStationView(props: {
         <NumberField label="随机种子" value={props.params.seed} step={1} onChange={(seed) => props.onParamsChange({ ...props.params, seed })} />
       </div>
       <ResourcePicker label="基站集合" records={props.records} selectedId={props.selectedId} onSelect={props.onSelect} />
+      <ResourceDetailPanel record={props.records.find((record) => record.id === props.selectedId) ?? null} lookup={props.lookup} />
       <ImportBox
         specs={props.specs}
         state={props.importState}
@@ -853,6 +890,7 @@ function PathView(props: {
   selectedBaseSetId: string;
   selectedPathId: string;
   points: Array<{ x: number; y: number; z: number }>;
+  lookup: ResourceLookup;
   importState: { format: string; content: string };
   isBusy: boolean;
   onCitySelect: (value: string) => void;
@@ -875,6 +913,7 @@ function PathView(props: {
       <ResourcePicker label="所属城市" records={props.cityModels} selectedId={props.selectedCityId} onSelect={props.onCitySelect} />
       <ResourcePicker label="预览基站集合" records={props.baseSets} selectedId={props.selectedBaseSetId} onSelect={props.onBaseSelect} />
       <ResourcePicker label="已保存路径" records={props.paths} selectedId={props.selectedPathId} onSelect={props.onPathSelect} />
+      <ResourceDetailPanel record={props.paths.find((record) => record.id === props.selectedPathId) ?? null} lookup={props.lookup} />
       <div className="point-table">
         {props.points.map((point, index) => (
           <div className="point-row" key={index}>
@@ -925,8 +964,10 @@ function removePoint(
 function ScenarioView(props: {
   cityModels: ResourceRecord[];
   baseSets: ResourceRecord[];
+  allBaseSets: ResourceRecord[];
   paths: ResourceRecord[];
   scenarios: ResourceRecord[];
+  lookup: ResourceLookup;
   selectedCityId: string;
   selectedBaseSetId: string;
   selectedPathId: string;
@@ -951,6 +992,10 @@ function ScenarioView(props: {
       <ResourcePicker label="基站集合" records={props.baseSets} selectedId={props.selectedBaseSetId} onSelect={props.onBaseSelect} />
       <ResourcePicker label="预设路径" records={props.paths} selectedId={props.selectedPathId} onSelect={props.onPathSelect} />
       <ResourcePicker label="场景组合" records={props.scenarios} selectedId={props.selectedScenarioId} onSelect={props.onScenarioSelect} />
+      <ScenarioDetailPanel
+        scenario={props.scenarios.find((record) => record.id === props.selectedScenarioId) ?? null}
+        lookup={{ ...props.lookup, baseSets: props.allBaseSets }}
+      />
     </div>
   );
 }
@@ -1011,6 +1056,7 @@ function QueueView(props: {
   selectedTaskId: string;
   progress: TaskProgress | null;
   logs: TaskLogs | null;
+  lookup: ResourceLookup;
   onSelect: (jobId: string) => void;
   onRefresh: () => void;
 }) {
@@ -1023,6 +1069,7 @@ function QueueView(props: {
         </button>
       </div>
       <TaskList tasks={props.tasks} selectedTaskId={props.selectedTaskId} onSelect={props.onSelect} />
+      <TaskDetailPanel task={props.tasks.find((task) => task.job_id === props.selectedTaskId) ?? null} lookup={props.lookup} />
       <div className="progress-panel">
         <strong>{props.progress?.stage ?? "未选择任务"}</strong>
         <div className="progress-track">
@@ -1040,9 +1087,13 @@ function ResultsView(props: {
   result: PlanningResult | null;
   selectedTaskId: string;
   selectedSolution: number;
+  lookup: ResourceLookup;
   onLoadResult: (jobId: string) => void;
   onSelectSolution: (solutionIndex: number) => void;
 }) {
+  const selectedMetrics = props.result
+    ? getSelectedObjectiveMetrics(props.result.objectives, props.selectedSolution)
+    : null;
   return (
     <div className="panel-stack">
       <div className="section-heading">
@@ -1054,13 +1105,16 @@ function ResultsView(props: {
         ) : null}
       </div>
       <TaskList tasks={props.tasks} selectedTaskId={props.selectedTaskId} onSelect={props.onLoadResult} />
+      <TaskDetailPanel task={props.tasks.find((task) => task.job_id === props.selectedTaskId) ?? null} lookup={props.lookup} />
       {props.result ? (
         <>
           <div className="metric-grid wide">
             <Metric label="解数量" value={props.result.metrics.solutionCount} />
-            <Metric label="平均信号" value={formatMaybe(props.result.metrics.meanSignalDbm)} />
-            <Metric label="切换次数" value={formatMaybe(props.result.metrics.meanSwitchCount)} />
-            <Metric label="覆盖率" value={formatMaybe(props.result.metrics.meanCoverageRatio)} />
+            <Metric label="信号" value={formatMaybe(selectedMetrics?.signalDbm)} />
+            <Metric label="切换次数" value={formatMaybe(selectedMetrics?.switchCount)} />
+            <Metric label="覆盖率" value={formatMaybe(selectedMetrics?.coverageRatio)} />
+            <Metric label="HV" value={formatMaybe(selectedMetrics?.hypervolume)} />
+            <Metric label="前沿总 HV" value={formatMaybe(selectedMetrics?.totalHypervolume)} />
           </div>
           <label>
             候选解
@@ -1076,6 +1130,187 @@ function ResultsView(props: {
       ) : null}
     </div>
   );
+}
+
+interface ResourceLookup {
+  cityModels: ResourceRecord[];
+  baseSets: ResourceRecord[];
+  paths: ResourceRecord[];
+  scenarios: ResourceRecord[];
+}
+
+function TaskDetailPanel(props: { task: TaskRecord | null; lookup: ResourceLookup }) {
+  if (!props.task) {
+    return <InfoPanel title="任务详情" emptyText="未选择任务" />;
+  }
+  const scenario = props.task.scenario_id
+    ? props.lookup.scenarios.find((record) => record.id === props.task?.scenario_id) ?? null
+    : null;
+  return (
+    <InfoPanel title="任务详情">
+      <DetailRows
+        rows={[
+          ["任务 ID", props.task.job_id],
+          ["状态", props.task.status],
+          ["算法", props.task.algorithm_key ?? props.task.config?.algorithmKey ?? "-"],
+          ["场景组合", scenario?.name ?? props.task.scenario_id ?? "-"],
+          ["创建时间", props.task.created_at ?? "-"],
+          ["更新时间", props.task.updated_at ?? "-"]
+        ]}
+      />
+      {props.task.error_message ? <p className="detail-warning">{props.task.error_message}</p> : null}
+      <DetailObject title="问题参数" value={props.task.config?.problem} />
+      <DetailObject title="算法参数" value={props.task.config?.algorithm} />
+      <ScenarioDetailPanel scenario={scenario} lookup={props.lookup} nested />
+    </InfoPanel>
+  );
+}
+
+function ScenarioDetailPanel(props: { scenario: ResourceRecord | null; lookup: ResourceLookup; nested?: boolean }) {
+  if (!props.scenario) {
+    return props.nested ? null : <InfoPanel title="场景组合详情" emptyText="未选择场景组合" />;
+  }
+  return <ResourceDetailPanel record={props.scenario} lookup={props.lookup} title="场景组合详情" nested={props.nested} />;
+}
+
+function ResourceDetailPanel(props: {
+  record: ResourceRecord | null;
+  lookup: ResourceLookup;
+  title?: string;
+  nested?: boolean;
+  depth?: number;
+}) {
+  const depth = props.depth ?? 0;
+  if (!props.record) {
+    return props.nested ? null : <InfoPanel title={props.title ?? "资源详情"} emptyText="未选择资源" />;
+  }
+
+  const generationParams = parseJsonValue(props.record.generation_params_json);
+  const metadata = parseJsonValue(props.record.metadata_json);
+  const bounds = parseJsonValue(props.record.bounds_json);
+  const city = props.record.city_model_id ? findResource(props.lookup.cityModels, props.record.city_model_id) : null;
+  const baseSet = props.record.base_station_set_id ? findResource(props.lookup.baseSets, props.record.base_station_set_id) : null;
+  const presetPath = props.record.preset_path_id ? findResource(props.lookup.paths, props.record.preset_path_id) : null;
+  const canNest = depth < 3;
+
+  return (
+    <InfoPanel title={props.title ?? `${getResourceKind(props.record)}详情`} nested={props.nested}>
+      <DetailRows
+        rows={[
+          ["名称", props.record.name],
+          ["ID", props.record.id],
+          ["类型", getResourceKind(props.record)],
+          ["来源", getSourceLabel(props.record.source_type)],
+          ["文件格式", props.record.source_format ?? "-"],
+          ["生成算法", props.record.generation_algorithm_key ?? "-"],
+          ["建筑数", getMetadataValue(metadata, "buildingCount") ?? "-"],
+          ["基站数", props.record.station_count ?? getMetadataValue(metadata, "stationCount") ?? "-"],
+          ["路径点数", props.record.point_count ?? getMetadataValue(metadata, "pointCount") ?? "-"],
+          ["创建时间", props.record.created_at ?? "-"]
+        ]}
+      />
+      <DetailObject title="生成参数" value={generationParams} />
+      <DetailObject title="边界信息" value={bounds} />
+      <DetailObject title="元数据" value={metadata} />
+      {canNest && city ? <ResourceDetailPanel record={city} lookup={props.lookup} nested depth={depth + 1} /> : null}
+      {canNest && baseSet ? <ResourceDetailPanel record={baseSet} lookup={props.lookup} nested depth={depth + 1} /> : null}
+      {canNest && presetPath ? <ResourceDetailPanel record={presetPath} lookup={props.lookup} nested depth={depth + 1} /> : null}
+    </InfoPanel>
+  );
+}
+
+function InfoPanel(props: { title: string; emptyText?: string; nested?: boolean; children?: ReactNode }) {
+  return (
+    <section className={props.nested ? "detail-panel nested" : "detail-panel"}>
+      <h3>{props.title}</h3>
+      {props.children ?? <p className="detail-empty">{props.emptyText}</p>}
+    </section>
+  );
+}
+
+function DetailRows(props: { rows: Array<[string, string | number]> }) {
+  return (
+    <dl className="detail-rows">
+      {props.rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{formatDetailValue(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function DetailObject(props: { title: string; value: unknown }) {
+  if (!props.value || (isRecord(props.value) && !Object.keys(props.value).length)) {
+    return null;
+  }
+  return (
+    <details className="detail-object">
+      <summary>{props.title}</summary>
+      <pre>{JSON.stringify(props.value, null, 2)}</pre>
+    </details>
+  );
+}
+
+function parseJsonValue(value: string | null | undefined): unknown {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getMetadataValue(metadata: unknown, key: string): string | number | null {
+  if (!isRecord(metadata)) {
+    return null;
+  }
+  const value = metadata[key];
+  return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
+function findResource(records: ResourceRecord[], id: string): ResourceRecord | null {
+  return records.find((record) => record.id === id) ?? null;
+}
+
+function getResourceKind(record: ResourceRecord): string {
+  if (record.snapshot_file_path || record.base_station_set_id || record.preset_path_id) {
+    return "场景组合";
+  }
+  if (typeof record.station_count === "number") {
+    return "基站集合";
+  }
+  if (typeof record.point_count === "number") {
+    return "预设路径";
+  }
+  return "城市模型";
+}
+
+function getSourceLabel(sourceType: string | undefined): string {
+  if (sourceType === "generated") {
+    return "算法生成";
+  }
+  if (sourceType === "imported") {
+    return "文件导入";
+  }
+  if (sourceType === "manual") {
+    return "手工创建";
+  }
+  return sourceType ?? "-";
+}
+
+function formatDetailValue(value: string | number): string {
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : value.toFixed(3);
+  }
+  return value || "-";
 }
 
 function SettingsView({ notice }: { notice: string }) {
@@ -1203,8 +1438,8 @@ function TaskList(props: {
   );
 }
 
-function formatMaybe(value: number | null): string {
-  if (value === null || Number.isNaN(value)) {
+function formatMaybe(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
     return "-";
   }
   return value.toFixed(3);

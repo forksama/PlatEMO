@@ -188,17 +188,16 @@ export function ThreeScene({
 
     const selected = result?.solutions.find((item) => item.solutionIndex === selectedSolution) ?? result?.solutions[0];
     if (selected && selected.waypoints.length >= 2) {
-      scene.add(makeLine(selected.waypoints.map(toScenePoint), 0x1f7a55, false));
-      const switchMaterial = new THREE.MeshStandardMaterial({ color: 0xd24f45, emissive: 0x3a0c08 });
-      selected.switchPoints.forEach((switchPoint) => {
-        const waypoint = selected.waypoints[switchPoint.waypointIndex];
-        if (!waypoint) {
-          return;
-        }
-        const marker = new THREE.Mesh(new THREE.SphereGeometry(12, 18, 18), switchMaterial);
-        marker.position.copy(toScenePoint(waypoint));
-        scene.add(marker);
-      });
+      const resultPoints = selected.waypoints.map(toScenePoint);
+      scene.add(makeLine(resultPoints, 0x1f7a55, false));
+      const startMaterial = new THREE.MeshStandardMaterial({ color: 0x2478a8, emissive: 0x061923 });
+      const endMaterial = new THREE.MeshStandardMaterial({ color: 0xf2b84b, emissive: 0x382406 });
+      const startMarker = new THREE.Mesh(new THREE.SphereGeometry(12, 18, 18), startMaterial);
+      startMarker.position.copy(resultPoints[0]);
+      scene.add(startMarker);
+      const endMarker = new THREE.Mesh(new THREE.SphereGeometry(12, 18, 18), endMaterial);
+      endMarker.position.copy(resultPoints[resultPoints.length - 1]);
+      scene.add(endMarker);
     }
 
     const contextMenuHandler = (event: MouseEvent) => {
