@@ -116,6 +116,7 @@ export interface ResultMetrics {
   meanSignalDbm: number | null;
   meanSwitchCount: number | null;
   meanCoverageRatio: number | null;
+  hypervolume: number | null;
 }
 
 export interface PlanningResult {
@@ -310,7 +311,8 @@ export function normalizeResult(raw: Record<string, unknown>): PlanningResult {
       solutionCount: Number(pick(metricsSource, "solution_count", "solutionCount", rawSolutions.length)),
       meanSignalDbm: pick(metricsSource, "mean_signal_dbm", "meanSignalDbm", null),
       meanSwitchCount: pick(metricsSource, "mean_switch_count", "meanSwitchCount", null),
-      meanCoverageRatio: pick(metricsSource, "mean_coverage_ratio", "meanCoverageRatio", null)
+      meanCoverageRatio: pick(metricsSource, "mean_coverage_ratio", "meanCoverageRatio", null),
+      hypervolume: pick(metricsSource, "hypervolume", "hypervolume", null)
     },
     objectives: rawObjectives.map((entry) => {
       const source = (entry ?? {}) as Record<string, unknown>;

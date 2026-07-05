@@ -45,9 +45,9 @@ assert.equal(second.solutionIndex, 1);
 assert.equal(second.signalDbm, -70);
 assert.equal(second.switchCount, 4);
 assert.equal(second.coverageRatio, 0.98);
-assert.ok(second.hypervolume > first.hypervolume, "HV should reflect each selected solution's contribution");
-assert.notEqual(first.hypervolume, second.hypervolume, "candidate metrics should change when selected solution changes");
+assert.equal("hypervolume" in first, false, "candidate metrics should not expose per-solution HV");
+assert.equal("totalHypervolume" in first, false, "candidate metrics should not calculate front HV in the frontend");
 
 const missing = getSelectedObjectiveMetrics(objectives, 99);
 assert.equal(missing.signalDbm, null);
-assert.equal(missing.hypervolume, null);
+assert.equal("hypervolume" in missing, false, "missing candidate metrics should not expose HV");

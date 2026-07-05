@@ -78,7 +78,7 @@ function run_planning_job(platemoRoot, inputJsonPath, artifactDir)
     cons = finalPopulation.cons;
 
     result = struct();
-    result.metrics = summarizePopulation(runtimeSeconds, Problem.FE, decs, objs);
+    result.metrics = summarizePopulation(runtimeSeconds, Problem.FE, decs, objs, finalPopulation, Problem.optimum);
     result.objectives = exportObjectives(objs);
     result.solutions = exportSolutions(Problem, decs);
     result.scenario = exportScenario(Problem, config);
@@ -94,11 +94,12 @@ function run_planning_job(platemoRoot, inputJsonPath, artifactDir)
     writeProgress(artifactDir, 'finished', 100, 'Planning job finished.');
 end
 
-function metrics = summarizePopulation(runtimeSeconds, actualFE, decs, objs)
+function metrics = summarizePopulation(runtimeSeconds, actualFE, decs, objs, population, optimum)
     metrics = struct();
     metrics.runtimeSeconds = runtimeSeconds;
     metrics.actualFE = actualFE;
     metrics.solutionCount = size(decs, 1);
+    metrics.hypervolume = calculateHypervolumeMetric(population, optimum);
     if isempty(objs)
         metrics.meanSignalDbm = NaN;
         metrics.meanSwitchCount = NaN;
@@ -111,6 +112,15 @@ function metrics = summarizePopulation(runtimeSeconds, actualFE, decs, objs)
         metrics.meanCoverageRatio = mean(-objs(:, 3), 'omitnan');
     else
         metrics.meanCoverageRatio = NaN;
+    end
+end
+
+function value = calculateHypervolumeMetric(population, optimum)
+    try
+        value = HV(population, optimum);
+    catch err
+        warning('run_planning_job:HypervolumeFailed', 'Failed to calculate HV: %s', err.message);
+        value = NaN;
     end
 end
 

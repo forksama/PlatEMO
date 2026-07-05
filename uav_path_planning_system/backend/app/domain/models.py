@@ -105,6 +105,7 @@ class ResultMetrics(BaseModel):
     mean_signal_dbm: float | None = None
     mean_switch_count: float | None = None
     mean_coverage_ratio: float | None = None
+    hypervolume: float | None = None
 
 
 class PlanningResult(BaseModel):

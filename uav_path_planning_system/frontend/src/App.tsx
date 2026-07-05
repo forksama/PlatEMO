@@ -119,7 +119,7 @@ const defaultConfig: PlanningConfig = {
 const previewResult = normalizeResult({
   jobId: "preview",
   status: "succeeded",
-  metrics: { solutionCount: 0 },
+  metrics: { solutionCount: 0, hypervolume: null },
   objectives: [],
   solutions: [],
   scenario: {}
@@ -1113,8 +1113,7 @@ function ResultsView(props: {
             <Metric label="信号" value={formatMaybe(selectedMetrics?.signalDbm)} />
             <Metric label="切换次数" value={formatMaybe(selectedMetrics?.switchCount)} />
             <Metric label="覆盖率" value={formatMaybe(selectedMetrics?.coverageRatio)} />
-            <Metric label="HV" value={formatMaybe(selectedMetrics?.hypervolume)} />
-            <Metric label="前沿总 HV" value={formatMaybe(selectedMetrics?.totalHypervolume)} />
+            <Metric label="总 HV" value={formatMaybe(props.result.metrics.hypervolume)} />
           </div>
           <label>
             候选解
@@ -1153,7 +1152,7 @@ function TaskDetailPanel(props: { task: TaskRecord | null; lookup: ResourceLooku
           ["任务 ID", props.task.job_id],
           ["状态", props.task.status],
           ["算法", props.task.algorithm_key ?? props.task.config?.algorithmKey ?? "-"],
-          ["场景组合", scenario?.name ?? props.task.scenario_id ?? "-"],
+          ["场景组合", formatResourceLink(scenario, props.task.scenario_id)],
           ["创建时间", props.task.created_at ?? "-"],
           ["更新时间", props.task.updated_at ?? "-"]
         ]}
@@ -1161,7 +1160,6 @@ function TaskDetailPanel(props: { task: TaskRecord | null; lookup: ResourceLooku
       {props.task.error_message ? <p className="detail-warning">{props.task.error_message}</p> : null}
       <DetailObject title="问题参数" value={props.task.config?.problem} />
       <DetailObject title="算法参数" value={props.task.config?.algorithm} />
-      <ScenarioDetailPanel scenario={scenario} lookup={props.lookup} nested />
     </InfoPanel>
   );
 }
@@ -1180,7 +1178,6 @@ function ResourceDetailPanel(props: {
   nested?: boolean;
   depth?: number;
 }) {
-  const depth = props.depth ?? 0;
   if (!props.record) {
     return props.nested ? null : <InfoPanel title={props.title ?? "资源详情"} emptyText="未选择资源" />;
   }
@@ -1191,7 +1188,6 @@ function ResourceDetailPanel(props: {
   const city = props.record.city_model_id ? findResource(props.lookup.cityModels, props.record.city_model_id) : null;
   const baseSet = props.record.base_station_set_id ? findResource(props.lookup.baseSets, props.record.base_station_set_id) : null;
   const presetPath = props.record.preset_path_id ? findResource(props.lookup.paths, props.record.preset_path_id) : null;
-  const canNest = depth < 3;
 
   return (
     <InfoPanel title={props.title ?? `${getResourceKind(props.record)}详情`} nested={props.nested}>
@@ -1206,15 +1202,15 @@ function ResourceDetailPanel(props: {
           ["建筑数", getMetadataValue(metadata, "buildingCount") ?? "-"],
           ["基站数", props.record.station_count ?? getMetadataValue(metadata, "stationCount") ?? "-"],
           ["路径点数", props.record.point_count ?? getMetadataValue(metadata, "pointCount") ?? "-"],
+          ["所属城市模型", formatResourceLink(city, props.record.city_model_id)],
+          ["基站集合", formatResourceLink(baseSet, props.record.base_station_set_id)],
+          ["预设路径", formatResourceLink(presetPath, props.record.preset_path_id)],
           ["创建时间", props.record.created_at ?? "-"]
         ]}
       />
       <DetailObject title="生成参数" value={generationParams} />
       <DetailObject title="边界信息" value={bounds} />
       <DetailObject title="元数据" value={metadata} />
-      {canNest && city ? <ResourceDetailPanel record={city} lookup={props.lookup} nested depth={depth + 1} /> : null}
-      {canNest && baseSet ? <ResourceDetailPanel record={baseSet} lookup={props.lookup} nested depth={depth + 1} /> : null}
-      {canNest && presetPath ? <ResourceDetailPanel record={presetPath} lookup={props.lookup} nested depth={depth + 1} /> : null}
     </InfoPanel>
   );
 }
@@ -1278,6 +1274,13 @@ function getMetadataValue(metadata: unknown, key: string): string | number | nul
 
 function findResource(records: ResourceRecord[], id: string): ResourceRecord | null {
   return records.find((record) => record.id === id) ?? null;
+}
+
+function formatResourceLink(record: ResourceRecord | null, fallbackId: string | null | undefined): string {
+  if (record) {
+    return `${record.name} (${record.id})`;
+  }
+  return fallbackId ?? "-";
 }
 
 function getResourceKind(record: ResourceRecord): string {
