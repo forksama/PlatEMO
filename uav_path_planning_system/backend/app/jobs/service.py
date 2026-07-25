@@ -4,6 +4,7 @@ import shutil
 from typing import Protocol
 from uuid import uuid4
 
+from backend.app.core.time import beijing_now_iso
 from backend.app.domain.models import (
     JobCreated,
     JobStatus,
@@ -161,7 +162,12 @@ class JobService:
         percent: int,
         message: str,
     ) -> None:
-        payload = {"stage": stage, "percent": percent, "message": message}
+        payload = {
+            "stage": stage,
+            "percent": percent,
+            "message": message,
+            "updatedAt": beijing_now_iso(),
+        }
         (artifact_dir / "progress.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",

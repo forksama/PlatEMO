@@ -1114,6 +1114,7 @@ function ResultsView(props: {
             <Metric label="切换次数" value={formatMaybe(selectedMetrics?.switchCount)} />
             <Metric label="覆盖率" value={formatMaybe(selectedMetrics?.coverageRatio)} />
             <Metric label="总 HV" value={formatMaybe(props.result.metrics.hypervolume)} />
+            <Metric label="运行耗时" value={formatDurationSeconds(props.result.metrics.runtimeSeconds)} />
           </div>
           <label>
             候选解
@@ -1153,8 +1154,8 @@ function TaskDetailPanel(props: { task: TaskRecord | null; lookup: ResourceLooku
           ["状态", props.task.status],
           ["算法", props.task.algorithm_key ?? props.task.config?.algorithmKey ?? "-"],
           ["场景组合", formatResourceLink(scenario, props.task.scenario_id)],
-          ["创建时间", props.task.created_at ?? "-"],
-          ["更新时间", props.task.updated_at ?? "-"]
+          ["创建时间", formatBeijingTime(props.task.created_at)],
+          ["更新时间", formatBeijingTime(props.task.updated_at)]
         ]}
       />
       {props.task.error_message ? <p className="detail-warning">{props.task.error_message}</p> : null}
@@ -1205,7 +1206,7 @@ function ResourceDetailPanel(props: {
           ["所属城市模型", formatResourceLink(city, props.record.city_model_id)],
           ["基站集合", formatResourceLink(baseSet, props.record.base_station_set_id)],
           ["预设路径", formatResourceLink(presetPath, props.record.preset_path_id)],
-          ["创建时间", props.record.created_at ?? "-"]
+          ["创建时间", formatBeijingTime(props.record.created_at)]
         ]}
       />
       <DetailObject title="生成参数" value={generationParams} />
@@ -1446,6 +1447,43 @@ function formatMaybe(value: number | null | undefined): string {
     return "-";
   }
   return value.toFixed(3);
+}
+
+function formatDurationSeconds(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "-";
+  }
+  if (value < 60) {
+    return `${value.toFixed(value < 10 ? 3 : 1)} s`;
+  }
+  const minutes = Math.floor(value / 60);
+  const seconds = value % 60;
+  if (minutes < 60) {
+    return `${minutes} min ${seconds.toFixed(1)} s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours} h ${remainingMinutes} min`;
+}
+
+function formatBeijingTime(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date);
 }
 
 export default App;

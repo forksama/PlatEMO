@@ -200,7 +200,8 @@ function writeProgress(artifactDir, stage, percent, message)
     progress.stage = stage;
     progress.percent = percent;
     progress.message = message;
-    progress.updatedAt = char(datetime('now', 'TimeZone', 'UTC', 'Format', 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z'''));
+    beijingNow = datetime('now', 'TimeZone', 'Asia/Shanghai', 'Format', 'yyyy-MM-dd''T''HH:mm:ss.SSS');
+    progress.updatedAt = [char(beijingNow), '+08:00'];
     progressPath = fullfile(artifactDir, 'progress.json');
     fid = fopen(progressPath, 'w');
     if fid < 0

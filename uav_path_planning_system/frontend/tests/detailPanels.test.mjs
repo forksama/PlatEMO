@@ -15,6 +15,7 @@ function sectionBetween(name, nextName) {
 
 const taskDetail = sectionBetween("TaskDetailPanel", "ScenarioDetailPanel");
 const resourceDetail = sectionBetween("ResourceDetailPanel", "InfoPanel");
+const resultsView = sectionBetween("ResultsView", "TaskDetailPanel");
 
 assert.equal(
   taskDetail.includes("<ScenarioDetailPanel"),
@@ -25,4 +26,20 @@ assert.equal(
   resourceDetail.includes("<ResourceDetailPanel"),
   false,
   "resource details should show only the selected resource and linked summaries, not recursive resource details"
+);
+
+assert.equal(
+  taskDetail.includes("formatBeijingTime"),
+  true,
+  "task details should format timestamps as Beijing time"
+);
+assert.equal(
+  resourceDetail.includes("formatBeijingTime"),
+  true,
+  "resource details should format timestamps as Beijing time"
+);
+assert.equal(
+  resultsView.includes('label="运行耗时"'),
+  true,
+  "results view should expose completed-task runtime as a metric"
 );

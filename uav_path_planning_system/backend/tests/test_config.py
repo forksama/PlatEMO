@@ -1,7 +1,9 @@
 from pathlib import Path
+from datetime import datetime, timedelta
 import unittest
 
 from backend.app.core.config import Settings
+from backend.app.core.time import beijing_now_iso
 
 
 class SettingsTests(unittest.TestCase):
@@ -17,6 +19,11 @@ class SettingsTests(unittest.TestCase):
             settings.database_path,
             settings.project_root / ".runtime" / "uav_path_planning.sqlite3",
         )
+
+    def test_beijing_now_uses_china_standard_time_offset(self) -> None:
+        timestamp = datetime.fromisoformat(beijing_now_iso())
+
+        self.assertEqual(timestamp.utcoffset(), timedelta(hours=8))
 
 
 if __name__ == "__main__":

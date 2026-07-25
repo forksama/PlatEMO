@@ -1,13 +1,13 @@
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from backend.app.core.time import beijing_now_iso
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _beijing_now() -> str:
+    return beijing_now_iso()
 
 
 @dataclass(frozen=True)
@@ -207,7 +207,7 @@ class ResourceStore:
         bounds: dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> CityModelRecord:
-        now = _utc_now()
+        now = _beijing_now()
         record = CityModelRecord(
             id=id,
             name=name,
@@ -293,7 +293,7 @@ class ResourceStore:
         station_count: int,
         metadata: dict[str, Any] | None = None,
     ) -> BaseStationSetRecord:
-        now = _utc_now()
+        now = _beijing_now()
         record = BaseStationSetRecord(
             id=id,
             name=name,
@@ -388,7 +388,7 @@ class ResourceStore:
         point_count: int,
         metadata: dict[str, Any] | None = None,
     ) -> PresetPathRecord:
-        now = _utc_now()
+        now = _beijing_now()
         record = PresetPathRecord(
             id=id,
             name=name,
@@ -465,7 +465,7 @@ class ResourceStore:
         matlab_scenario_file_path: str,
         metadata: dict[str, Any] | None = None,
     ) -> ScenarioRecord:
-        now = _utc_now()
+        now = _beijing_now()
         record = ScenarioRecord(
             id=id,
             name=name,

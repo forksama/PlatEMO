@@ -1,9 +1,9 @@
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.app.core.time import beijing_now_iso
 from backend.app.domain.models import JobStatus, PlanningConfig
 
 
@@ -59,7 +59,7 @@ class JobStore:
                     conn.execute(ddl)
 
     def create_job(self, job_id: str, config: PlanningConfig) -> JobRecord:
-        now = datetime.now(timezone.utc).isoformat()
+        now = beijing_now_iso()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -98,7 +98,7 @@ class JobStore:
         status: JobStatus,
         error_message: str | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = beijing_now_iso()
         with self._connect() as conn:
             conn.execute(
                 "UPDATE jobs SET status = ?, updated_at = ?, error_message = ? WHERE job_id = ?",
@@ -112,7 +112,7 @@ class JobStore:
         artifact_dir: Path | None = None,
         progress: dict | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = beijing_now_iso()
         progress_json = json.dumps(progress, ensure_ascii=False) if progress is not None else None
         with self._connect() as conn:
             conn.execute(
